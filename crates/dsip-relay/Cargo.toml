@@ -1,7 +1,7 @@
 [package]
 name = "dsip-relay"
 description = "DSIP relay as a library and a thin binary: hello binding, per-leg forking, attempt outcome signaling, store-and-forward, presence and broadcast authority"
-version = "0.3.0"
+version = "0.3.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

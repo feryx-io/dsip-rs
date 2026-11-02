@@ -7,6 +7,49 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+## [2026-11-05] — workspace release
+
+Sealed presence on the native phone (app plan stage A2). DSIP spec: `poc-v1.0.4` (was `poc-v1.0.3`): DSIP Core 1.0,
+with §9.3 stating that a subscription is the subscribing device's (spec-gap 177); 2,476 vectors, 0 failures.
+
+| Crate | Version |
+|---|---|
+| `dsip-broadcast` | 0.1.1 (was 0.1.0) |
+| `dsip-cli` | 0.2.0 |
+| `dsip-core` | 0.1.0 |
+| `dsip-dht` | 0.1.0 |
+| `dsip-endpoint` | 0.3.0 (was 0.2.0) |
+| `dsip-events` | 0.2.0 |
+| `dsip-gateway` | 0.1.0 |
+| `dsip-kt` | 0.1.0 |
+| `dsip-mailbox` | 0.4.0 |
+| `dsip-media` | 0.1.0 |
+| `dsip-messaging` | 0.3.0 |
+| `dsip-messaging-device` | 0.3.0 (was 0.2.0) |
+| `dsip-messenger` | 0.2.0 |
+| `dsip-mls` | 0.1.0 |
+| `dsip-node` | 0.1.1 |
+| `dsip-number` | 0.1.0 |
+| `dsip-phone` | 0.3.0 (was 0.2.0) |
+| `dsip-push` | 0.1.0 |
+| `dsip-recording` | 0.1.0 |
+| `dsip-relay` | 0.3.1 (was 0.3.0) |
+| `dsip-schema` | 0.1.0 |
+| `dsip-session` | 0.2.0 |
+| `dsip-testkit` | 0.2.0 |
+| `dsip-transport` | 0.5.0 (was 0.4.0) |
+| `dsip-wake` | 0.1.0 |
+| `dsip-wasm` | 0.1.0 |
+| `dsip-webrtc-binding` | 0.1.0 |
+
+**Breaking changes** (API):
+- `dsip_transport::agent::AgentEvent` gains a variant, `GrantIssued` (#30): an exhaustive `match` on it must add an
+  arm (or `_`).
+
+The relay's authority now keeps one subscription per subscribing device (spec-gap 177): `dsip-relay` 0.3.1, whose
+own code is unchanged, takes the fix through `dsip-broadcast` 0.1.1. `dsip-mailbox` 0.4.0, `dsip-push` 0.1.0,
+`dsip-node` 0.1.1 and `dsip-web` 0.1.1 are rebuilt from the same code.
+
 ### Added
 
 - `dsip-phone`: presence (Presence Profile draft, in clear: `presence/0.1`). `Phone::set_presence` publishes this
@@ -19,7 +62,9 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
   `Agent::grant_request` / `Phone::grant_request` answer an introduction that came another way with a grant issued
   as one through the relay is (so it can be withdrawn or followed), returned compact for the host to deposit;
   `Core::hold_grant` / `Agent::hold_grant` / `Phone::hold_grant` hold a grant received that way, checked as a
-  credential, so it is presented where a grant admits (a presence `subscribe`).
+  credential, so it is presented where a grant admits (a presence `subscribe`): it opens the presence keys the grant
+  carries and takes a grant that follows one held (§19.4, spec-gap 150), as one through the relay is, returning what
+  holding it emitted with whether it is held.
 - `dsip-transport`: `Agent::sign`, `Agent::relay_at` (bind at another relay and return its DID),
   `Agent::send_frame` (to our relay or another), and `Agent::keep_peer` (keep a connection to another relay open
   with no call through it).
@@ -33,12 +78,6 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
   phone watches its own identity and seals at the epoch a sibling rotated to.
 - `dsip-transport`: `AgentEvent::GrantIssued` (a grant the agent sent, compact, for a host that also delivers it
   another way) and `Agent::presence_sealed`.
-
-### Changed
-
-- `dsip-endpoint`: `Core::hold_grant` opens the presence keys a grant carries and takes a grant that follows one
-  held (§19.4, spec-gap 150), as one through the relay is; it returns what holding it emitted with whether it is held.
-  `Agent::hold_grant` is async.
 
 ### Fixed
 
