@@ -42,6 +42,9 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ### Fixed
 
+- `dsip-broadcast` (the relay's authority): a subscription is the subscribing device's (§9.3, spec-gap 177). A
+  renewal and `expires_in: 0` matched per subscriber identity, so a second device of one identity subscribing to the
+  same target replaced the first device's subscription, which stopped being notified.
 - `dsip-messaging-device`: a grant read from the mailbox whose `from` is the signing device (as a calling engine
   signs it) is the identity's that the device's delegation binds it to (§7.4), as wherever a grant is checked as a
   credential; it was taken as the device's.

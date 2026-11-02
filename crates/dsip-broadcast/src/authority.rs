@@ -2,7 +2,7 @@
 //!
 //! Spec: §9.3 (authorization is the authority's policy; anti-enumeration:
 //! identical `reject policy.blocked` for unauthorized and nonexistent targets;
-//! per-event caps; renewal replaces; `expires_in: 0` terminates; the first
+//! per-event caps; renewal replaces and `expires_in: 0` terminates the same device's subscription (spec-gap 177); the first
 //! notify carries current state; terminal notifies carry a reason), §22.1
 //! (the publisher's record, keyed by stream), §22.3 (statements attached, never
 //! overwriting), §8.3 (newer replaces older; expired records are invalid); Presence Profile P§3 (a device's own
@@ -562,10 +562,11 @@ impl Authority {
         let expires_in = m["expires_in"].as_i64().unwrap_or(0);
         let id = m["id"].as_str().unwrap_or("").to_string();
         let from = m["from"].as_str().unwrap_or("").to_string();
+        // §9.3 (spec-gap 177): a subscription is the subscribing device's; renewal and termination match its device
         let existing = self
             .subscriptions
             .iter()
-            .find(|(_, s)| s.subscriber == identity && s.target == target && s.events == events)
+            .find(|(_, s)| s.device == from && s.target == target && s.events == events)
             .map(|(k, _)| k.clone());
         if expires_in == 0 {
             // §9.3: expires_in 0 terminates a matching subscription
