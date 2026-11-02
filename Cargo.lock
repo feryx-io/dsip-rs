@@ -1260,7 +1260,7 @@ dependencies = [
 
 [[package]]
 name = "dsip-broadcast"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dsip-core",
  "dsip-schema",
@@ -1340,7 +1340,7 @@ dependencies = [
 
 [[package]]
 name = "dsip-endpoint"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "dsip-core",
  "dsip-recording",
@@ -1492,7 +1492,7 @@ dependencies = [
 
 [[package]]
 name = "dsip-messaging-device"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "dsip-core",
  "dsip-endpoint",
@@ -1585,7 +1585,7 @@ dependencies = [
 
 [[package]]
 name = "dsip-phone"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "dsip-broadcast",
  "dsip-core",
@@ -1637,7 +1637,7 @@ dependencies = [
 
 [[package]]
 name = "dsip-relay"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1699,7 +1699,7 @@ dependencies = [
 
 [[package]]
 name = "dsip-transport"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "base64 0.22.1",
  "clap",

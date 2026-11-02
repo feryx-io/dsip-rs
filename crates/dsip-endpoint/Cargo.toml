@@ -1,7 +1,7 @@
 [package]
 name = "dsip-endpoint"
 description = "IO-free DSIP endpoint core: verify inbound frames, drive the §12 engine, build and sign outbound payloads. Shared by the native agent and the WASM build."
-version = "0.2.0"
+version = "0.3.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

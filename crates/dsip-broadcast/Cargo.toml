@@ -1,7 +1,7 @@
 [package]
 name = "dsip-broadcast"
 description = "DSIP Verified Broadcast (§22) and subscription protocol (§9.3): authority registry, subscriber state, receiver verification with provenance"
-version.workspace = true
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
