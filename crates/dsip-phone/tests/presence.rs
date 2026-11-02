@@ -213,3 +213,27 @@ async fn the_relay_carries_a_sealed_record_it_cannot_read() {
     assert_eq!(record["sealed_state"].as_str().map(str::len), Some(208));
     assert!(dave.agent.presence_key(bob.identity(), "main.0").is_some(), "the grant carried main.0");
 }
+
+#[tokio::test]
+async fn a_sibling_seals_at_the_epoch_another_device_rotated_to() {
+    let net = Network::new();
+    let bob_id = net.identity("Bob");
+    let sibling = net.device_of(&bob_id, "Bob's laptop");
+    let bob = Phone::builder().identity(bob_id).dialer(net.dialer()).seal_presence().build().await.unwrap();
+    let laptop = Phone::builder().identity(sibling).dialer(net.dialer()).seal_presence().build().await.unwrap();
+    let alice = phone(&net, "Alice").await;
+    grant(&bob, &alice).await;
+    laptop.set_presence(Some("away"));
+    bob.set_presence(Some("busy"));
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // P§12.5: the phone rotates main; Dave, granted afterwards, holds only main.1
+    assert_eq!(bob.revoke_grants_to(alice.identity()).await.unwrap(), 1);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let dave = phone(&net, "Dave").await;
+    grant(&bob, &dave).await;
+    dave.watch(bob.identity()).await;
+    // the laptop saw main.1 in the phone's record through its own watch and sealed again under it
+    let p = until(&dave, bob.identity(), "both of Bob's devices readable", |p| p.source == "record" && p.unreadable == 0).await;
+    assert!(["busy", "away"].contains(&p.state.as_str()), "{p:?}");
+}
