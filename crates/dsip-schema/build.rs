@@ -4,7 +4,8 @@
 //! `generate_schemas.py`. This script regenerates them into a scratch
 //! directory and fails the build if the committed files differ, so the
 //! embedded copies can never drift from the generator (plan §3, WS-2).
-//! If `python3` is unavailable the check is skipped with a warning.
+//! If `python3` is unavailable the check is skipped with a warning. Line endings are not compared: on Windows the
+//! generator writes CRLF, and a checkout may hold either.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -55,8 +56,8 @@ fn compare(committed: &Path, regenerated: &Path) {
     for entry in std::fs::read_dir(regenerated).expect("regen dir") {
         let p = entry.expect("entry").path();
         let name = p.file_name().expect("name").to_owned();
-        let a = std::fs::read(&p).expect("read regen");
-        let b = std::fs::read(committed.join(&name)).unwrap_or_default();
+        let a = lf(std::fs::read(&p).expect("read regen"));
+        let b = lf(std::fs::read(committed.join(&name)).unwrap_or_default());
         if a != b {
             drift.push(name.to_string_lossy().into_owned());
         }
@@ -68,4 +69,15 @@ fn compare(committed: &Path, regenerated: &Path) {
             drift
         );
     }
+}
+
+/// `bytes` with every CRLF made LF.
+fn lf(bytes: Vec<u8>) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    for (i, &b) in bytes.iter().enumerate() {
+        if !(b == b'\r' && bytes.get(i + 1) == Some(&b'\n')) {
+            out.push(b);
+        }
+    }
+    out
 }
