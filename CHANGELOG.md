@@ -7,6 +7,44 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+## [2026-11-06] — workspace release
+
+dsip-rs builds on Windows (found building dsip-app there, app plan stage A3). DSIP spec: `poc-v1.0.4`, unchanged
+(DSIP Core 1.0; 2,476 vectors, 0 failures).
+
+| Crate | Version |
+|---|---|
+| `dsip-broadcast` | 0.1.1 |
+| `dsip-cli` | 0.2.0 |
+| `dsip-core` | 0.1.0 |
+| `dsip-dht` | 0.1.0 |
+| `dsip-endpoint` | 0.3.0 |
+| `dsip-events` | 0.2.0 |
+| `dsip-gateway` | 0.1.0 |
+| `dsip-kt` | 0.1.0 |
+| `dsip-mailbox` | 0.4.0 |
+| `dsip-media` | 0.1.1 (was 0.1.0) |
+| `dsip-messaging` | 0.3.1 (was 0.3.0) |
+| `dsip-messaging-device` | 0.3.0 |
+| `dsip-messenger` | 0.2.0 |
+| `dsip-mls` | 0.1.0 |
+| `dsip-node` | 0.1.1 |
+| `dsip-number` | 0.1.0 |
+| `dsip-phone` | 0.3.0 |
+| `dsip-push` | 0.1.0 |
+| `dsip-recording` | 0.1.0 |
+| `dsip-relay` | 0.3.1 |
+| `dsip-schema` | 0.1.1 (was 0.1.0) |
+| `dsip-session` | 0.2.0 |
+| `dsip-testkit` | 0.2.0 |
+| `dsip-transport` | 0.5.0 |
+| `dsip-wake` | 0.1.1 (was 0.1.0) |
+| `dsip-wasm` | 0.1.0 |
+| `dsip-webrtc-binding` | 0.1.0 |
+
+No breaking changes. The services are unchanged: `dsip-relay` 0.3.1, `dsip-mailbox` 0.4.0, `dsip-push` 0.1.0,
+`dsip-node` 0.1.1 and `dsip-web` 0.1.1 are rebuilt from the same code.
+
 ### Fixed
 
 - Building on Windows (found building dsip-app there):
