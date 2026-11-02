@@ -7,6 +7,14 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+### Fixed
+
+- Building on Windows (found building dsip-app there):
+  - The schema freshness checks (`dsip-schema`, `dsip-messaging`, `dsip-wake`) compare without line endings. The
+    generator writes CRLF on Windows, so every schema read as drift.
+  - `dsip-media` takes forge-media at its release `v2026.11.01` (was 663f53f). `forge-rtp`'s SRTP crypto crates
+    there are dependencies on every platform; they sat under its unix-only table, so it did not build on Windows.
+
 ## [2026-11-05] — workspace release
 
 Sealed presence on the native phone (app plan stage A2). DSIP spec: `poc-v1.0.4` (was `poc-v1.0.3`): DSIP Core 1.0,
