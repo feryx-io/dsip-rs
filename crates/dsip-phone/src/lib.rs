@@ -193,6 +193,7 @@ pub struct Phone {
     presence: watch::Receiver<std::collections::BTreeMap<String, Presence>>,
     identity: String,
     device: String,
+    relay_did: String,
     relay_wake: Option<serde_json::Value>,
     task: Mutex<Option<tokio::task::JoinHandle<Result<()>>>>,
 }
@@ -307,6 +308,11 @@ impl Phone {
     /// The next grant the phone issued for the host to deliver ([`IssuedGrant`]); `None` once the phone has closed.
     pub async fn issued_grant(&self) -> Option<IssuedGrant> {
         self.issued.lock().await.recv().await
+    }
+
+    /// Our relay's DID, from its verified `hello` (§13.2): what a registration with it names as its waker (W§4.1).
+    pub fn relay_did(&self) -> &str {
+        &self.relay_did
     }
 
     /// What our relay said of waking devices in its `hello` (`{"profiles": ["wake/0.1"], "kinds": [...]}`), or `None`
@@ -474,6 +480,7 @@ impl PhoneBuilder {
         let agent = dsip_transport::agent::Agent::connect(id, cfg, dsip_core::did::StaticResolver::default()).await?;
         let (identity, device) = (agent.identity_did().to_string(), agent.device_did().to_string());
         let relay_wake = agent.relay().capabilities.get("wake").cloned();
+        let relay_did = agent.relay().did.clone();
         let (cmds, cmds_rx) = mpsc::unbounded_channel();
         let (incoming_tx, incoming) = mpsc::unbounded_channel();
         let (issued_tx, issued) = mpsc::unbounded_channel();
@@ -481,7 +488,7 @@ impl PhoneBuilder {
         let line = Line { cmds, wake: agent.waker() };
         let task = tokio::spawn(run::Runner::new(agent, cmds_rx, line.clone(), incoming_tx, issued_tx, presence_tx, self.media).run());
         Ok(Phone { line, relay_url: home, hints: self.hints, incoming: Mutex::new(incoming), issued: Mutex::new(issued), presence, identity, device,
-                   relay_wake, task: Mutex::new(Some(task)) })
+                   relay_did, relay_wake, task: Mutex::new(Some(task)) })
     }
 }
 

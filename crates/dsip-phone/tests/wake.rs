@@ -20,7 +20,8 @@ async fn phone(net: &Network, name: &str) -> Phone {
 async fn register(gw: &PushGateway, net: &Network, bob: &Phone, token: &str) -> (Answer, [u8; 32]) {
     let wake_key = KeyPair::generate();
     let handle = enrol(&gw.client, &gw.did, &wake_key, "fcm", push::APP, token, None).await.expect("enrolled");
-    let reg = dsip_wake::registration(&wake_key, net.relay().did(), &gw.did, &handle, dsip_transport::now_s());
+    assert_eq!(bob.relay_did(), net.relay().did());
+    let reg = dsip_wake::registration(&wake_key, bob.relay_did(), &gw.did, &handle, dsip_transport::now_s());
     let (secret, public) = dsip_wake::seal_keys();
     (bob.wake_register(reg, Some(public), None).await.expect("an answer"), secret)
 }
