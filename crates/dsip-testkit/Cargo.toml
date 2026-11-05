@@ -13,5 +13,6 @@ dsip-endpoint.workspace = true
 dsip-relay.workspace = true
 dsip-session.workspace = true
 dsip-transport.workspace = true
+dsip-push.workspace = true
 tokio.workspace = true
 serde_json.workspace = true

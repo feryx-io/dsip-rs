@@ -31,6 +31,8 @@ pub(crate) struct Runner {
     issued: mpsc::UnboundedSender<IssuedGrant>,
     calls: HashMap<String, Track>,
     presence: Presence,
+    /// Requests to our relay waiting on its answer, by id (W§4.2).
+    requests: HashMap<String, tokio::sync::oneshot::Sender<Result<dsip_transport::wake::Answer>>>,
     /// Wakes the task once a second while presence needs the clock.
     ticker: Option<tokio::task::JoinHandle<()>>,
     #[cfg(feature = "media")]
@@ -74,6 +76,7 @@ impl Runner {
             issued,
             calls: HashMap::new(),
             presence: Presence::new(presence),
+            requests: HashMap::new(),
             ticker: None,
         }
     }
@@ -185,6 +188,26 @@ impl Runner {
                 }
                 let _ = reply.send(self.agent.save_contacts().map(|_| n).map_err(Into::into));
             }
+            Cmd::Wake { ask, reply } => {
+                let (device, relay, now) = (self.agent.device_did().to_string(), self.agent.relay().did.clone(), dsip_transport::now_s());
+                let payload = match ask {
+                    crate::WakeAsk::Register { registration, seal_key, kinds } => {
+                        let kinds: Option<Vec<&str>> = kinds.as_ref().map(|k| k.iter().map(String::as_str).collect());
+                        dsip_wake::register_message(&device, &relay, &registration, seal_key.as_ref(), kinds.as_deref(), now)
+                    }
+                    crate::WakeAsk::Remove => dsip_wake::remove_message(&device, &relay, now),
+                };
+                // the requests the relay never answered are let go with the next
+                self.requests.retain(|_, r| !r.is_closed());
+                match self.agent.request(payload, 30).await {
+                    Ok(id) => {
+                        self.requests.insert(id, reply);
+                    }
+                    Err(e) => {
+                        let _ = reply.send(Err(e.into()));
+                    }
+                }
+            }
             Cmd::Close => unreachable!("handled by run"),
         }
         Ok(())
@@ -203,6 +226,11 @@ impl Runner {
             match ev {
                 AgentEvent::Received { payload, .. } if self.presence.received(&self.agent, &payload) => {}
                 AgentEvent::Reconnected { .. } => self.presence.bound(&mut self.agent).await,
+                AgentEvent::Reply { in_reply_to, frame } => {
+                    if let Some(reply) = self.requests.remove(&in_reply_to) {
+                        let _ = reply.send(self.agent.read_reply(&in_reply_to, &frame).map_err(Into::into));
+                    }
+                }
                 AgentEvent::Received { message, identity, display_name, .. } => {
                     let sid = message.session_id().to_string();
                     if let Some(r) = &message.reason {

@@ -51,6 +51,14 @@ pub enum AgentEvent {
         /// The signed grant, compact.
         grant: String,
     },
+    /// Our relay answered a request sent with [`Agent::request`]: the answer's frame, for the host to verify and read
+    /// (a profile's answer the engine does not know, such as `wake-accepted`, W§4.2).
+    Reply {
+        /// The request's id, which the answer names in `in_reply_to`.
+        in_reply_to: String,
+        /// The answer, as it came.
+        frame: String,
+    },
     /// A verified inbound message was handed to the engine.
     Received {
         /// The abbreviated message.
@@ -156,6 +164,8 @@ pub struct Agent {
     routes: std::collections::HashMap<String, (String, i64, bool)>,
     /// Connections to other relays the host keeps open with no call through them ([`Agent::keep_peer`]).
     kept: std::collections::HashSet<String>,
+    /// The ids of requests sent with [`Agent::request`] whose answers go to the host, not the engine.
+    awaiting: std::collections::HashSet<String>,
 }
 
 impl Agent {
@@ -196,7 +206,7 @@ impl Agent {
         let calls = cfg.calls.map(Calls::new);
         Ok(Agent { id, cfg, supported, resolver, conn, core, calls, events: vec![], did_resolver, resolved_tx, resolved_rx, replaced: false, replaced_closed: false,
                    wake: Arc::new(tokio::sync::Notify::new()), peers: Default::default(), routes: Default::default(),
-                   kept: Default::default() })
+                   kept: Default::default(), awaiting: Default::default() })
     }
 
     fn params<'a>(id: &'a Identity, cfg: &AgentConfig, supported: &Supported) -> ConnectParams<'a> {
@@ -443,6 +453,44 @@ impl Agent {
         }
     }
 
+    /// Send `payload`, a request to our own relay that the engine does not make (a profile's, such as `wake-register`,
+    /// W§4.2), signed as our device with its delegation; its answer comes back as [`AgentEvent::Reply`] rather than to
+    /// the engine. Returns the request's id. `payload` keeps its own `id`, `issued_at` and `expires_at` when it has them.
+    /// Spec: §13.2 (a request on the binding), W§4.2.
+    pub async fn request(&mut self, payload: serde_json::Value, ttl: i64) -> Result<String> {
+        let frame = self.sign(payload, ttl)?;
+        let env = dsip_core::envelope::Envelope::from_frame(&frame)?;
+        let id = payload_of(&env).and_then(|p| p["id"].as_str().map(String::from)).unwrap_or_default();
+        self.awaiting.insert(id.clone());
+        if let Err(e) = self.conn.send(&env).await {
+            self.awaiting.remove(&id);
+            return Err(e);
+        }
+        Ok(id)
+    }
+
+    /// Verify and read `frame`, our relay's answer to request `id` ([`AgentEvent::Reply`]): `wake-accepted`, or a core
+    /// `error`. Spec: W§4.2, §10.2.
+    pub fn read_reply(&self, id: &str, frame: &str) -> std::result::Result<crate::wake::Answer, crate::wake::WakeError> {
+        crate::wake::read_reply(&self.conn.relay.did, &self.resolver, frame, id, now_s())
+    }
+
+    /// Stop waiting for the answer to request `id` (the host gave up on it).
+    pub fn forget_request(&mut self, id: &str) {
+        self.awaiting.remove(id);
+    }
+
+    /// `frame` from our relay, when it answers a request sent with [`Agent::request`]: the event to give the host.
+    fn reply_to_request(&mut self, frame: &str) -> Option<AgentEvent> {
+        if self.awaiting.is_empty() {
+            return None;
+        }
+        let env = dsip_core::envelope::Envelope::from_frame(frame).ok()?;
+        let p = payload_of(&env)?;
+        let id = p["in_reply_to"].as_str()?;
+        self.awaiting.remove(id).then(|| AgentEvent::Reply { in_reply_to: id.to_string(), frame: frame.to_string() })
+    }
+
     /// Keep our connection to the relay at `url` open while no call uses it (`true`: a presence watch there), or let it
     /// close once none does (`false`). A kept connection that drops is not redialled: it leaves
     /// [`Agent::peer_relays`], and the host sends there again to bind anew.
@@ -626,10 +674,13 @@ impl Agent {
             let wait = self.core.next_deadline().map(|d| (d - now_s()).max(0) as u64).unwrap_or(3600);
             tokio::select! {
                 frame = self.conn.recv() => match frame {
-                    Ok(Some(text)) => {
-                        let out = self.core.inbound(&text, now_s())?;
-                        self.dispatch(out).await?;
-                    }
+                    Ok(Some(text)) => match self.reply_to_request(&text) {
+                        Some(reply) => self.events.push(reply),
+                        None => {
+                            let out = self.core.inbound(&text, now_s())?;
+                            self.dispatch(out).await?;
+                        }
+                    },
                     // §13.2: a connection the relay replaced is not reconnected; that would replace the other one
                     Ok(None) | Err(_) if self.replaced => {
                         self.replaced_closed = true;
@@ -696,4 +747,9 @@ impl Agent {
             }
         }
     }
+}
+
+/// The decoded payload of an envelope, unverified: only to match a reply to its request.
+fn payload_of(env: &dsip_core::envelope::Envelope) -> Option<serde_json::Value> {
+    serde_json::from_slice(&dsip_core::b64::decode(&env.payload)?).ok()
 }

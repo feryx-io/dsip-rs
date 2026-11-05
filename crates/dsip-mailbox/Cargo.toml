@@ -45,6 +45,8 @@ openmls = "0.9.0"
 [dev-dependencies]
 # a push gateway with a recording provider, for tests/wake.rs
 dsip-push.workspace = true
+# the same, as the testkit runs it, for tests/messenger_wake.rs
+dsip-testkit.workspace = true
 
 [features]
 # The packages' static (musl) binaries: SQLite and OpenSSL compiled in, not linked from the system

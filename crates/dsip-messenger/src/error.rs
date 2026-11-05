@@ -47,6 +47,9 @@ pub enum Error {
     /// A local file failed.
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    /// The mailbox's answer to `wake-register` did not verify (W§4.2).
+    #[error(transparent)]
+    Wake(#[from] dsip_transport::wake::WakeError),
     /// HTTPS failed.
     #[error("http: {0}")]
     Http(#[from] reqwest::Error),

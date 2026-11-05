@@ -1,5 +1,6 @@
 //! Talking to a push gateway: one signed envelope POSTed to its `DSIPWake` endpoint, one signed envelope back.
-//! A waker (relay, mailbox) sends `wake` with it; a device sends `wake-enrol`.
+//! A waker (relay, mailbox) sends `wake` with it; a device sends `wake-enrol` ([`enrol`]). A waker's own answer to a
+//! device's `wake-register` is read the same way ([`read_reply`]).
 //!
 //! Spec: W§2.1 (the endpoint in the gateway's DID document, `POST` with `application/dsip+json`, a `200` answered with
 //! `wake-accepted` or a core `error` naming the request in `in_reply_to`; any other status is a transport failure),
@@ -52,6 +53,9 @@ pub enum WakeError {
         /// Why.
         detail: String,
     },
+    /// The gateway refused the enrolment ([`enrol`]): its reason.
+    #[error("refused: {0}")]
+    Refused(String),
     /// The answer was not a signed envelope from the gateway answering this request.
     #[error("answer from {did}: {detail}")]
     BadAnswer {
@@ -122,14 +126,23 @@ impl WakeClient {
 ///
 /// Spec: W§2.1, §10.2 (stages 1–11; the answer is a fresh message, so the replay window applies).
 pub fn read_answer(gateway: &str, doc: &dsip_core::did::DidDocument, body: &str, request_id: &str, now: i64) -> Result<Answer, WakeError> {
-    let bad = |detail: &str| WakeError::BadAnswer { did: gateway.to_string(), detail: detail.to_string() };
-    let env = Envelope::from_frame(body.trim()).map_err(|_| bad("not an envelope"))?;
     let mut resolver = StaticResolver::default();
     resolver.insert(doc.clone());
-    let ver = envelope::verify(&env, &Context::new(now, &resolver), None).map_err(|v| bad(&format!("{:?}", v.code)))?;
+    read_reply(gateway, &resolver, body, request_id, now)
+}
+
+/// Verify and read `frame`, an answer from `from` (a gateway, or the waker a device sent `wake-register`, W§4.2) to the
+/// request `request_id`, against the documents in `resolver`: `wake-accepted` or a core `error`.
+///
+/// Spec: W§2.1, W§4.2, §10.2 (stages 1–11; the answer is a fresh message, so the replay window applies). Impl: read
+/// apart from the endpoint's pipeline, whose schemas are the core's and drop the profile's `wake-accepted`.
+pub fn read_reply(from: &str, resolver: &StaticResolver, frame: &str, request_id: &str, now: i64) -> Result<Answer, WakeError> {
+    let bad = |detail: &str| WakeError::BadAnswer { did: from.to_string(), detail: detail.to_string() };
+    let env = Envelope::from_frame(frame.trim()).map_err(|_| bad("not an envelope"))?;
+    let ver = envelope::verify(&env, &Context::new(now, resolver), None).map_err(|v| bad(&format!("{:?}", v.code)))?;
     let p = &ver.payload;
-    if ver.signer_did != gateway || p["from"] != gateway {
-        return Err(bad("not signed by the gateway"));
+    if ver.signer_did != from || p["from"] != from {
+        return Err(bad("not signed by the one asked"));
     }
     if p["in_reply_to"] != request_id {
         return Err(bad("in_reply_to does not name the request"));
@@ -141,5 +154,20 @@ pub fn read_answer(gateway: &str, doc: &dsip_core::did::DidDocument, body: &str,
             retry_after: p["retry_after"].as_i64(),
         }),
         other => Err(bad(&format!("unexpected {other}"))),
+    }
+}
+
+/// Enrol at `gateway` (W§3): `wake_key`, a key made for this enrolment and nothing else, sends `wake-enrol` with the
+/// platform `token` of `provider` (`apns`, `fcm`) for `app`; returns the handle the gateway issued, or the refusal's
+/// reason (`wake.unsupported-app`, …) as [`WakeError::Refused`]. The gateway never learns the device's DID.
+///
+/// Spec: W§3 (spec-gap 175).
+pub async fn enrol(client: &WakeClient, gateway: &str, wake_key: &dsip_core::keys::KeyPair, provider: &str, app: &str, token: &str,
+                   environment: Option<&str>) -> Result<String, WakeError> {
+    let msg = dsip_wake::enrol_message(&wake_key.did(), gateway, provider, app, token, environment, crate::now_s());
+    match client.send(gateway, &envelope::sign(&msg, wake_key, &wake_key.kid())).await? {
+        Answer::Accepted { handle: Some(h) } => Ok(h),
+        Answer::Accepted { handle: None } => Err(WakeError::BadAnswer { did: gateway.into(), detail: "wake-accepted with no handle".into() }),
+        Answer::Refused { reason, .. } => Err(WakeError::Refused(reason)),
     }
 }

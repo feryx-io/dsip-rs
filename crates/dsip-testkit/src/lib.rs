@@ -26,6 +26,8 @@
 
 pub mod hints;
 pub use hints::hints_node;
+pub mod push;
+pub use push::PushGateway;
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -75,6 +77,11 @@ impl Network {
         let dir = std::env::temp_dir().join(format!("dsip-testkit-{}-{n}", std::process::id()));
         let url = if n == 0 { RELAY_URL.to_string() } else { format!("wss://relay-{n}.testkit.invalid/dsip") };
         Network { relay, clock, dir, names: AtomicU64::new(0), url }
+    }
+
+    /// A relay that wakes its devices through `gateway` (W§5).
+    pub fn waking(gateway: &PushGateway) -> Network {
+        Network::with(RelayConfig { wake: Some(gateway.waker()), ..RelayConfig::default() })
     }
 
     /// The relay.

@@ -59,8 +59,10 @@ vectors first: a stage that needs protocol waits for its vectors, Python, impl-t
   `dsip-wake` crate. The relay wakes (`dsip-relay --wake`) through `dsip-push`, the gateway service, tested end to
   end in `crates/dsip-push/tests/relay_wake.rs`; the mailbox wakes for stored items (`dsip-mailbox --wake`,
   `crates/dsip-mailbox/tests/wake.rs`); `dsip-push` is packaged (`.deb`, image) and tested like the other services.
-  Left for A1: delivery through Apple's and Google's services, which needs the app's APNs key and Firebase project, and
-  the device side (enrolling, registering), which comes with the app (A2, A5).
+  Left for A1: delivery through Apple's and Google's services, which needs the app's APNs key and Firebase project. The
+  device side's protocol is here for the app (A5d): `dsip_transport::wake::enrol`, `dsip_wake::registration` and
+  `seal_keys`, `Phone::wake_register` (the relay, its answer read apart from the endpoint, which knows only the core's
+  types) and `Messenger::wake_register` (the mailbox), tested against `dsip_testkit::PushGateway`.
 - **A2. The running client (`dsip-app` crate).** The app as a long-lived thing, as Anvil's `anvil-app` is: it owns
   the identity, a `dsip-phone` and a `dsip-messenger`, keeps the state a screen shows (identity, devices, contacts and
   their grants, conversations, calls, presence, settings), and publishes every change on one stream. Commands go in;
