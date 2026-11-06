@@ -1511,7 +1511,7 @@ dependencies = [
 
 [[package]]
 name = "dsip-messenger"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "dsip-core",
  "dsip-messaging",
@@ -1587,7 +1587,7 @@ dependencies = [
 
 [[package]]
 name = "dsip-phone"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "dsip-broadcast",
  "dsip-core",
@@ -1689,7 +1689,7 @@ dependencies = [
 
 [[package]]
 name = "dsip-testkit"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "dsip-core",
  "dsip-endpoint",
@@ -1703,7 +1703,7 @@ dependencies = [
 
 [[package]]
 name = "dsip-transport"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -1735,7 +1735,7 @@ dependencies = [
 
 [[package]]
 name = "dsip-wake"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "dsip-core",
  "jsonschema",
