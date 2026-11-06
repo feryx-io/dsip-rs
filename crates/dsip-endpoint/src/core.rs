@@ -474,7 +474,13 @@ impl Core {
         let env = Envelope::from_frame(frame).ok()?;
         let p: Value = serde_json::from_slice(&dsip_core::b64::decode(&env.payload)?).ok()?;
         let to = p.get("to")?.as_str()?;
-        self.cfg.unseal_keys.iter().find(|(did, _)| did == to).map(|(_, sk)| *sk)
+        // an identity may hold more than one (its delegated key and the derived one, §7.3): the one that opens it
+        let mut keys = self.cfg.unseal_keys.iter().filter(|(did, _)| did == to).map(|(_, sk)| *sk);
+        let first = keys.next()?;
+        if p.get("sealed").is_none() {
+            return Some(first);
+        }
+        std::iter::once(first).chain(keys).find(|sk| dsip_schema::sealed::open(&p, sk).is_ok()).or(Some(first))
     }
 
     /// A fresh ULID at `now` (seconds), unique within the second.

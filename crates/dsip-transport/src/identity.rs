@@ -1,6 +1,7 @@
-//! On-disk identity: controller key, device key, and the device delegation.
+//! On-disk identity: controller key, device key, the device delegation, and an optional key agreement key the
+//! identity delegated (`key-agreement.json`).
 //!
-//! Spec: §7.3 (identity vs device keys), §7.4 (device delegation). The
+//! Spec: §7.3 (identity vs device keys; key agreement delegation, spec-gap 179), §7.4 (device delegation). The
 //! controller key signs exactly one thing in Phase 1 — the delegation — and
 //! never a session message; the device key signs everything on the wire.
 
@@ -37,7 +38,36 @@ pub struct Identity {
     pub delegation: Envelope,
     /// Metadata.
     pub meta: IdentityMeta,
+    /// The key agreement key the identity delegated, if it has one (§7.3, spec-gap 179): what is sealed to the
+    /// identity opens with it, and a device holding it needs no identity key to open anything.
+    pub key_agreement: Option<KeyAgreement>,
 }
+
+/// An independent X25519 key agreement key and the identity's credential naming it (§7.3, spec-gap 179).
+#[derive(Clone)]
+pub struct KeyAgreement {
+    /// The X25519 secret.
+    pub secret: [u8; 32],
+    /// The `KeyAgreementDelegation`, signed by the identity.
+    pub delegation: Envelope,
+}
+
+impl KeyAgreement {
+    /// The X25519 public key.
+    pub fn public(&self) -> [u8; 32] {
+        dsip_core::hpke::x25519_public(&self.secret)
+    }
+}
+
+/// What `key-agreement.json` holds.
+#[derive(Serialize, Deserialize)]
+struct KeyAgreementFile {
+    secret: String,
+    delegation: String,
+}
+
+/// The longest key agreement delegation (§7.3).
+const KEY_AGREEMENT_LIFETIME_S: i64 = 31_536_000;
 
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
@@ -92,7 +122,7 @@ impl Identity {
         write(&dir.join("device.key"), hex(&device.seed()))?;
         write(&dir.join("delegation.json"), delegation.frame())?;
         write(&dir.join("identity.json"), serde_json::to_string_pretty(&meta)?)?;
-        Ok(Identity { dir: dir.to_path_buf(), controller, device, delegation, meta })
+        Ok(Identity { dir: dir.to_path_buf(), controller, device, delegation, meta, key_agreement: None })
     }
 
     /// Re-home this identity on `did:web` `did`: its controller key becomes the document's `#key-1`, the delegation is
@@ -132,6 +162,10 @@ impl Identity {
         write(&self.dir.join("delegation.json"), self.delegation.frame())?;
         write(&self.dir.join("identity.json"), serde_json::to_string_pretty(&self.meta)?)?;
         write(&self.dir.join("did.json"), serde_json::to_string_pretty(&doc)?)?;
+        // a key agreement delegation names its subject: the new identity's is issued under it
+        if self.key_agreement.is_some() {
+            self.issue_key_agreement(now)?;
+        }
         Ok(())
     }
 
@@ -143,6 +177,112 @@ impl Identity {
         let device = KeyPair::from_seed(key("device.key")?);
         let delegation = Envelope::from_frame(&read("delegation.json")?)?;
         let meta: IdentityMeta = serde_json::from_str(&read("identity.json")?)?;
-        Ok(Identity { dir: dir.to_path_buf(), controller, device, delegation, meta })
+        let key_agreement = match std::fs::read_to_string(dir.join("key-agreement.json")) {
+            Ok(text) => {
+                let f: KeyAgreementFile = serde_json::from_str(&text)?;
+                let secret = unhex(&f.secret).ok_or_else(|| Error::BadKey(dir.join("key-agreement.json")))?;
+                Some(KeyAgreement { secret, delegation: Envelope::from_frame(&f.delegation)? })
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(Error::File { path: dir.join("key-agreement.json"), source: e }),
+        };
+        Ok(Identity { dir: dir.to_path_buf(), controller, device, delegation, meta, key_agreement })
+    }
+
+    /// The `kid` the identity signs its own credentials with: its did:key's, or `#key-1` of a did:web it moved to.
+    fn identity_kid(&self) -> String {
+        if self.meta.identity == self.controller.did() {
+            self.controller.kid()
+        } else {
+            format!("{}#key-1", self.meta.identity)
+        }
+    }
+
+    /// Make a new key agreement key, sign the identity's delegation naming it (a year, the longest, §7.3), and keep
+    /// both in `key-agreement.json` (its owner's alone): what is sealed to the identity from then on opens with it.
+    /// A key held already is replaced (a newer delegation is current).
+    ///
+    /// Spec: §7.3 (spec-gap 179).
+    pub fn issue_key_agreement(&mut self, now: i64) -> Result<()> {
+        let secret = KeyPair::generate().seed();
+        let public = dsip_core::hpke::x25519_public(&secret);
+        let issued_at = now - 60;
+        let payload = serde_json::json!({
+            "type": "KeyAgreementDelegation", "subject": self.meta.identity, "key": dsip_core::did::multibase_x25519(&public),
+            "issued_at": issued_at, "expires_at": issued_at + KEY_AGREEMENT_LIFETIME_S,
+        });
+        let delegation = sign(&payload, &self.controller, &self.identity_kid());
+        let f = KeyAgreementFile { secret: hex(&secret), delegation: delegation.frame() };
+        let path = self.dir.join("key-agreement.json");
+        write(&path, serde_json::to_string_pretty(&f)?)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file(&path, std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)))?;
+        }
+        self.key_agreement = Some(KeyAgreement { secret, delegation });
+        Ok(())
+    }
+
+    /// The identity's X25519 key agreement secret (§7.3): its delegated key's, else the one derived from the
+    /// identity key (M§6.9).
+    pub fn key_agreement_secret(&self) -> [u8; 32] {
+        match &self.key_agreement {
+            Some(k) => k.secret,
+            None => dsip_core::hpke::x25519_from_ed25519_seed(&self.controller.seed()),
+        }
+    }
+
+    /// Every X25519 secret what is sealed to the identity may open with: the delegated key's first, then the derived
+    /// one a sender that has not seen the delegation still seals to.
+    pub fn key_agreement_secrets(&self) -> Vec<[u8; 32]> {
+        let derived = dsip_core::hpke::x25519_from_ed25519_seed(&self.controller.seed());
+        match &self.key_agreement {
+            Some(k) => vec![k.secret, derived],
+            None => vec![derived],
+        }
+    }
+}
+
+#[cfg(test)]
+mod key_agreement_tests {
+    use super::*;
+
+    #[test]
+    fn an_identity_issues_a_key_agreement_key_and_its_hint_carries_the_credential() {
+        let dir = std::env::temp_dir().join(format!("dsip-identity-ka-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut id = Identity::init(&dir, "Ann", None, None).unwrap();
+        let derived = dsip_core::hpke::x25519_from_ed25519_seed(&id.controller.seed());
+        assert_eq!(id.key_agreement_secrets(), vec![derived], "none issued: the derived key alone");
+
+        let now = crate::now_s();
+        id.issue_key_agreement(now).unwrap();
+        let ka = id.key_agreement.clone().unwrap();
+        assert_eq!(id.key_agreement_secret(), ka.secret);
+        assert_eq!(id.key_agreement_secrets(), vec![ka.secret, derived], "the delegated key first");
+
+        // kept: loaded back as issued; the file its owner's alone
+        let back = Identity::load(&dir).unwrap();
+        assert_eq!(back.key_agreement.as_ref().map(|k| (k.secret, k.delegation.frame())), Some((ka.secret, ka.delegation.frame())));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(dir.join("key-agreement.json")).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+
+        // the credential verifies as the identity's (§7.3), naming the key
+        let resolver = dsip_core::did::StaticResolver::default();
+        let ctx = dsip_core::envelope::Context::new(now, &resolver);
+        let cred = serde_json::from_str(&ka.delegation.frame()).unwrap();
+        let v = dsip_schema::key_agreement::verify(&cred, &ctx, Some(&id.meta.identity)).unwrap();
+        assert_eq!(v.public, ka.public());
+
+        // a device's hint carrying it passes a node's check (DHT Hints Profile §4)
+        let endpoints = [dsip_dht::record::Endpoint::signaling("wss://relay.example.com/dsip")];
+        let hint = crate::hints::reachability_with(&id.meta.identity, &id.device, &id.delegation, &endpoints, now, now, 3600, Some(&ka.delegation));
+        let e = dsip_dht::record::evaluate(&hint.frame(), &ctx, None);
+        assert!(e.verdict.ok(), "{:?}", e.verdict);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

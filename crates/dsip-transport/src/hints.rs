@@ -148,10 +148,29 @@ pub fn endpoints(relay: Option<&str>, mailbox: Option<(&str, &str)>) -> Vec<Endp
 /// `delegation`, `seq` (newer than any it published before), valid `ttl_s` from `now` (at most
 /// [`dsip_core::HINT_MAX_VALIDITY_S`]).
 pub fn reachability(identity: &str, device: &KeyPair, delegation: &Envelope, endpoints: &[Endpoint], seq: i64, now: i64, ttl_s: i64) -> Envelope {
+    reachability_with(identity, device, delegation, endpoints, seq, now, ttl_s, None)
+}
+
+/// As [`reachability`], carrying the identity's key agreement delegation (`key_agreement`, DHT Hints Profile §2; core
+/// §7.3, spec-gap 179), so that senders find the key they seal to where they find the identity's devices.
+#[allow(clippy::too_many_arguments)] // a hint's fields, as `reachability`'s
+pub fn reachability_with(
+    identity: &str,
+    device: &KeyPair,
+    delegation: &Envelope,
+    endpoints: &[Endpoint],
+    seq: i64,
+    now: i64,
+    ttl_s: i64,
+    key_agreement: Option<&Envelope>,
+) -> Envelope {
     let ttl = ttl_s.clamp(3, dsip_core::HINT_MAX_VALIDITY_S);
     // its id's time is its issue time (§12.9: a ULID consistent with `issued_at`)
     let id = dsip_core::ulid::Ulid::generate_at((now.max(0) as u64) * 1000);
-    let payload = dsip_dht::record::hint_payload_with_id(identity, identity, endpoints, seq, now, ttl, id.as_str());
+    let mut payload = dsip_dht::record::hint_payload_with_id(identity, identity, endpoints, seq, now, ttl, id.as_str());
+    if let Some(ka) = key_agreement {
+        payload["key_agreement"] = json!({"protected": ka.protected, "payload": ka.payload, "signature": ka.signature});
+    }
     dsip_dht::record::sign_hint(&payload, device, vec![delegation.clone()])
 }
 

@@ -242,7 +242,8 @@ impl Pending {
 /// Messaging Profile asks a device to keep (M§5.4, M§8.5). The host moves frames between it and the mailbox.
 pub struct Messenger<S: Store = MemoryStore> {
     keys: IdentityKeys,
-    controller_seed: Option<[u8; 32]>,
+    /// The identity's X25519 key agreement secrets, the delegated key's first (core §7.3, spec-gap 179).
+    key_agreement_secrets: Vec<[u8; 32]>,
     mls: Device<S>,
     mailbox: (String, String),
     resolver: StaticResolver,
@@ -368,12 +369,18 @@ impl<S: Store> Messenger<S> {
             display_name: id["display_name"].as_str().unwrap_or("").to_string(),
         };
         let controller_seed = id["controller_seed_hex"].as_str().and_then(|h| unhex(h).ok());
+        let key_agreement_secrets: Vec<[u8; 32]> = id["key_agreement_secret_hex"]
+            .as_str()
+            .and_then(|h| unhex(h).ok())
+            .into_iter()
+            .chain(controller_seed.map(|s| dsip_messaging::first_contact::x25519_from_ed25519_seed(&s)))
+            .collect();
         let mls = Device::with_provider(device, compact(&delegation), store);
         let st = state;
         let now_i = now as i64;
         let mut m = Messenger {
             keys,
-            controller_seed,
+            key_agreement_secrets,
             mls,
             mailbox: (mailbox_did.to_string(), mailbox_uri.to_string()),
             resolver: StaticResolver::default(),
@@ -2912,7 +2919,7 @@ impl<S: Store> Messenger<S> {
     fn first_contact_in(&mut self, item: &Value, now: i64) -> Vec<Event> {
         let ctx = self.ctx(now);
         // sealed purposes (M§6.9) open with the identity's key agreement key, derived from the identity key (spec-gap 55)
-        let why = match first_contact::received(item, &self.keys.identity, &ctx, now, self.controller_seed.as_ref()) {
+        let why = match first_contact::received_with(item, &self.keys.identity, &ctx, now, &self.key_agreement_secrets) {
             first_contact::Received::Request(req) => {
                 let purpose = req.purpose.unwrap_or_else(|| "(sealed: this device holds no key agreement key)".to_string());
                 self.requests.insert(req.id.clone(), json!({"from": req.from, "purpose": purpose, "sealed": req.sealed,

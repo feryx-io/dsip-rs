@@ -133,7 +133,7 @@ pub const ROUTE_GRACE_S: i64 = 60;
 
 /// The wire tag of the audience `id`'s identity labels `label` (P§12.1): the label stays on the subject's devices.
 pub fn audience_tag(id: &Identity, label: &str) -> String {
-    dsip_core::presence_seal::audience_tag(&dsip_core::hpke::x25519_from_ed25519_seed(&id.controller.seed()), &id.meta.identity, label)
+    dsip_core::presence_seal::audience_tag(&id.key_agreement_secret(), &id.meta.identity, label)
 }
 
 type Resolution = (String, std::result::Result<dsip_core::did::DidDocument, dsip_core::did::ResolveError>);
@@ -189,10 +189,13 @@ impl Agent {
             seal: cfg.seal,
             resolve_on_demand: true,
             presence: cfg.presence.clone(),
-            unseal_keys: vec![
-                (id.meta.identity.clone(), dsip_core::hpke::x25519_from_ed25519_seed(&id.controller.seed())),
-                (id.device.did(), dsip_core::hpke::x25519_from_ed25519_seed(&id.device.seed())),
-            ],
+            // the identity's key agreement secrets, the delegated one first (P§12.1's `s`, §7.3), then the device's
+            unseal_keys: id
+                .key_agreement_secrets()
+                .into_iter()
+                .map(|sk| (id.meta.identity.clone(), sk))
+                .chain([(id.device.did(), dsip_core::hpke::x25519_from_ed25519_seed(&id.device.seed()))])
+                .collect(),
         };
         let mut core = Core::new(keys, core_cfg, resolver.clone(), now_s());
         // Seed persisted contacts (§19.4) so grants survive restarts.
