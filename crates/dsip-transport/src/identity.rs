@@ -162,9 +162,9 @@ impl Identity {
         write(&self.dir.join("delegation.json"), self.delegation.frame())?;
         write(&self.dir.join("identity.json"), serde_json::to_string_pretty(&self.meta)?)?;
         write(&self.dir.join("did.json"), serde_json::to_string_pretty(&doc)?)?;
-        // a key agreement delegation names its subject: the new identity's is issued under it
-        if self.key_agreement.is_some() {
-            self.issue_key_agreement(now)?;
+        // a key agreement delegation names its subject: the new identity's is issued under it, for the same key
+        if let Some(secret) = self.key_agreement.as_ref().map(|k| k.secret) {
+            self.issue_key_agreement(secret, now)?;
         }
         Ok(())
     }
@@ -198,13 +198,27 @@ impl Identity {
         }
     }
 
-    /// Make a new key agreement key, sign the identity's delegation naming it (a year, the longest, §7.3), and keep
-    /// both in `key-agreement.json` (its owner's alone): what is sealed to the identity from then on opens with it.
-    /// A key held already is replaced (a newer delegation is current).
+    /// The `n`th key agreement secret of this identity, derived from its identity key: HMAC-SHA256 keyed by the
+    /// Ed25519 seed over `dsip key agreement secret v1` and `n` (4 bytes, big-endian). Unlike the did:key derivation
+    /// it says nothing of the signing key, and every device holding the identity key derives the same one, so a second
+    /// device restored from a backup opens what the first does; `n` moves on when a key is replaced.
+    ///
+    /// Spec: §7.3. Impl: how an identity's devices come to hold the key agreement secret is the identity's own matter
+    /// (§7.3, M§6.9); deriving it keeps a backup of the identity key enough.
+    pub fn derived_key_agreement_secret(&self, n: u32) -> [u8; 32] {
+        use hmac::Mac;
+        let mut m = <hmac::Hmac<sha2::Sha256> as Mac>::new_from_slice(&self.controller.seed()).expect("an HMAC key");
+        m.update(b"dsip key agreement secret v1");
+        m.update(&n.to_be_bytes());
+        m.finalize().into_bytes().into()
+    }
+
+    /// Sign the identity's delegation naming the X25519 key of `secret` (a year, the longest, §7.3), and keep both in
+    /// `key-agreement.json` (its owner's alone): what is sealed to the identity from then on opens with it. A key held
+    /// already is replaced (a newer delegation is current).
     ///
     /// Spec: §7.3 (spec-gap 179).
-    pub fn issue_key_agreement(&mut self, now: i64) -> Result<()> {
-        let secret = KeyPair::generate().seed();
+    pub fn issue_key_agreement(&mut self, secret: [u8; 32], now: i64) -> Result<()> {
         let public = dsip_core::hpke::x25519_public(&secret);
         let issued_at = now - 60;
         let payload = serde_json::json!({
@@ -257,7 +271,10 @@ mod key_agreement_tests {
         assert_eq!(id.key_agreement_secrets(), vec![derived], "none issued: the derived key alone");
 
         let now = crate::now_s();
-        id.issue_key_agreement(now).unwrap();
+        let secret = id.derived_key_agreement_secret(0);
+        assert_ne!(secret, derived, "not the did:key derivation");
+        assert_ne!(secret, id.derived_key_agreement_secret(1), "the next one differs");
+        id.issue_key_agreement(secret, now).unwrap();
         let ka = id.key_agreement.clone().unwrap();
         assert_eq!(id.key_agreement_secret(), ka.secret);
         assert_eq!(id.key_agreement_secrets(), vec![ka.secret, derived], "the delegated key first");
