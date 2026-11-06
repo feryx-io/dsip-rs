@@ -59,6 +59,21 @@ fn write(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
     file(path, std::fs::write(path, contents))
 }
 
+/// A key file: readable by its owner alone (Unix; elsewhere the folder's own protection).
+fn write_key(path: &Path, key: &KeyPair) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut f = file(path, std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path))?;
+        // an existing file keeps its mode through `open`: set it
+        file(path, f.set_permissions(std::fs::Permissions::from_mode(0o600)))?;
+        file(path, f.write_all(hex(&key.seed()).as_bytes()))
+    }
+    #[cfg(not(unix))]
+    write(path, hex(&key.seed()))
+}
+
 impl Identity {
     /// Create a new identity directory with fresh keys and a one-year delegation.
     pub fn init(dir: &Path, display_name: &str, fixture: Option<&str>, controller_from: Option<&Path>) -> Result<Identity> {
@@ -88,8 +103,8 @@ impl Identity {
         );
         let delegation = sign(&payload, &controller, &controller.kid());
         let meta = IdentityMeta { identity: controller.did(), device: device.did(), display_name: display_name.into() };
-        write(&dir.join("controller.key"), hex(&controller.seed()))?;
-        write(&dir.join("device.key"), hex(&device.seed()))?;
+        write_key(&dir.join("controller.key"), &controller)?;
+        write_key(&dir.join("device.key"), &device)?;
         write(&dir.join("delegation.json"), delegation.frame())?;
         write(&dir.join("identity.json"), serde_json::to_string_pretty(&meta)?)?;
         Ok(Identity { dir: dir.to_path_buf(), controller, device, delegation, meta })
@@ -144,5 +159,24 @@ impl Identity {
         let delegation = Envelope::from_frame(&read("delegation.json")?)?;
         let meta: IdentityMeta = serde_json::from_str(&read("identity.json")?)?;
         Ok(Identity { dir: dir.to_path_buf(), controller, device, delegation, meta })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn the_key_files_are_their_owners_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("dsip-identity-mode-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let made = Identity::init(&dir, "Ann", None, None).unwrap();
+        for f in ["controller.key", "device.key"] {
+            assert_eq!(std::fs::metadata(dir.join(f)).unwrap().permissions().mode() & 0o777, 0o600, "{f}");
+        }
+        assert_eq!(Identity::load(&dir).unwrap().device.did(), made.device.did(), "and still read back");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
