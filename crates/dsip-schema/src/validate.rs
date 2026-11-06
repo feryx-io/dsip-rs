@@ -22,7 +22,7 @@ use crate::embedded::SCHEMAS;
 /// Names of the embedded spec schemas.
 pub const SCHEMA_NAMES: &[&str] = &[
     "invite", "progress", "answer", "reject", "cancel", "update", "info", "bye", "error", "hello", "introduction",
-    "grant", "publish", "subscribe", "notify", "unpublish", "provenance", "key-rotation", "reachability-hint",
+    "grant", "publish", "subscribe", "notify", "unpublish", "provenance", "key-rotation", "reachability-hint", "key-agreement-delegation",
     "webrtc-info-data", "dtmf-info-data", "envelope", "message",
 ];
 

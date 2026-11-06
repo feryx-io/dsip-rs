@@ -182,6 +182,13 @@ pub fn evaluate(frame: &str, ctx: &Context, existing: Option<&Envelope>) -> Eval
     if let Err(e) = validate_against(HINT_TYPE, p) {
         return reject(Verdict::reject(RejectCode::SchemaInvalid).detail(e));
     }
+    // 1.x, spec-gap 179: a key agreement delegation the hint carries verifies for its subject, or the hint is refused
+    // (DHT Hints Profile §4 step 2)
+    if let Some(ka) = p.get("key_agreement") {
+        if let Err(why) = dsip_schema::key_agreement::verify(ka, ctx, Some(ver.identity.as_str())) {
+            return reject(Verdict::reject(RejectCode::KeyAgreementInvalid).detail(why));
+        }
+    }
     let hint = Hint {
         subject: ver.identity.clone(),
         endpoints: serde_json::from_value(p["endpoints"].clone()).unwrap_or_default(),
