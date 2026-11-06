@@ -341,6 +341,12 @@ impl Agent {
         Ok(held)
     }
 
+    /// Hold another identity's key agreement delegation (as its hint carries it): sealing to that identity uses its
+    /// key from now on. Whether it verified. Spec: §7.3 (spec-gap 179).
+    pub fn hold_key_agreement(&mut self, credential: &serde_json::Value) -> bool {
+        self.core.hold_key_agreement(credential, now_s())
+    }
+
     /// The held grants from `target` to present when watching its presence (`subscribe` `claims`). Spec: P§6.
     pub fn presence_claims(&self, target: &str) -> Vec<serde_json::Value> {
         self.core.presence_claims(target, now_s())

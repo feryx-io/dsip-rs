@@ -334,6 +334,27 @@ fn a_sealed_call_refused_as_an_unknown_critical_extension_is_placed_once_more_in
 
 
 #[test]
+fn a_sealed_invite_goes_to_the_key_the_callees_key_agreement_delegation_names() {
+    // core §7.3, §10.4 rule 3 (spec-gap 179): Bob's identity delegated an X25519 key; his device holds that alone
+    let bob_identity = KeyPair::from_seed([2; 32]);
+    let secret = [42u8; 32];
+    let public = dsip_core::hpke::x25519_public(&secret);
+    let payload = json!({"type": "KeyAgreementDelegation", "subject": bob_identity.did(),
+                         "key": dsip_core::did::multibase_x25519(&public), "issued_at": NOW - 60, "expires_at": NOW + 86_400});
+    let credential: Value = serde_json::from_str(&sign(&payload, &bob_identity, &bob_identity.kid()).frame()).unwrap();
+
+    let mut a = Side::new(1, "Alice", CallsConfig::default(), CoreConfig { seal: true, ..Default::default() });
+    let device_signed: Value = serde_json::from_str(&sign(&payload, &KeyPair::from_seed([102; 32]), &KeyPair::from_seed([102; 32]).kid()).frame()).unwrap();
+    assert!(!a.core.hold_key_agreement(&device_signed, NOW), "not the identity's own: refused");
+    assert!(a.core.hold_key_agreement(&credential, NOW));
+    let mut b = Side::new(2, "Bob", CallsConfig::default(), CoreConfig { unseal_keys: vec![(bob_identity.did(), secret)], ..Default::default() });
+    let sid = place(&mut a, &b);
+    assert!(a.sent_of("invite")[0].get("sealed").is_some(), "sealed: {:?}", a.sent_of("invite")[0]);
+    pump(&mut a, &mut b);
+    assert_eq!(b.state(&sid), Some(SessionState::Alerting), "Bob's device opened it with the delegated key alone, and rings");
+}
+
+#[test]
 fn with_one_call_a_second_invite_is_declined_busy_without_asking_the_user() {
     let mut a = Side::new(1, "Alice", CallsConfig::default(), CoreConfig::default());
     let mut c = Side::new(3, "Carol", CallsConfig::default(), CoreConfig::default());

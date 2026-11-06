@@ -309,6 +309,9 @@ pub struct Core {
     cfg: CoreConfig,
     supported: Supported,
     resolver: StaticResolver,
+    /// Verified key agreement delegations of other identities (§7.3, spec-gap 179), from their hints: what is sealed
+    /// to them goes to the key the current one names.
+    key_agreements: Vec<Value>,
     ep: Endpoint,
     seen: SeenIds,
     /// Offers by session id (invite) or update id, ours and theirs.
@@ -383,6 +386,7 @@ impl Core {
         Core {
             keys,
             cfg,
+            key_agreements: vec![],
             supported: Supported::all_known(),
             resolver,
             ep,
@@ -454,14 +458,31 @@ impl Core {
         Ok(sign_bytes(&serde_json::to_vec(&p)?, &self.keys.device, &self.keys.device.kid(), vec![self.keys.delegation.clone()]).frame())
     }
 
-    /// The X25519 key agreement key of `did`: converted from a `did:key`, or the `keyAgreement` of a resolved document.
+    /// The X25519 key agreement key of `did` at `now`: its resolved document's `keyAgreement`, else its current held
+    /// key agreement delegation, else for a `did:key` the derived key.
     ///
-    /// Spec: §10.4 rule 3, §7.2, §8.1 — never from a hint.
-    fn key_agreement_of(&self, did: &str) -> Option<[u8; 32]> {
-        match dsip_core::did::public_from_did_key(did) {
-            Some(public) => dsip_core::hpke::x25519_from_ed25519_public(&public),
-            None => dsip_core::did::Resolver::resolve(&self.resolver, did)?.x25519_key_agreement(),
+    /// Spec: §10.4 rule 3, §7.3 (spec-gap 179), §8.1 — never hint data: a delegation is the subject's own credential.
+    fn key_agreement_of(&self, did: &str, now: i64) -> Option<[u8; 32]> {
+        let document = dsip_core::did::Resolver::resolve(&self.resolver, did)
+            .and_then(|d| d.x25519_key_agreement())
+            .map(|k| dsip_core::did::multibase_x25519(&k));
+        let ctx = dsip_core::envelope::Context::new(now, &self.resolver);
+        dsip_schema::key_agreement::recipient_key(did, document.as_deref(), &self.key_agreements, &ctx).map(|(_, k)| k)
+    }
+
+    /// Hold another identity's key agreement delegation, when it verifies (as a hint carries it): what is sealed to
+    /// that identity from now on goes to its key. Whether it was taken.
+    ///
+    /// Spec: §7.3 (spec-gap 179).
+    pub fn hold_key_agreement(&mut self, credential: &Value, now: i64) -> bool {
+        let ctx = dsip_core::envelope::Context::new(now, &self.resolver);
+        if dsip_schema::key_agreement::verify(credential, &ctx, None).is_err() {
+            return false;
         }
+        // the expired go; the same one is held once
+        self.key_agreements.retain(|c| dsip_schema::key_agreement::verify(c, &ctx, None).is_ok() && c != credential);
+        self.key_agreements.push(credential.clone());
+        true
     }
 
     /// The unseal key for an inbound frame: the configured secret of the DID its payload is addressed `to`.
@@ -1230,7 +1251,7 @@ impl Core {
                     let keys: Option<BTreeMap<String, [u8; 32]>> = self.identity_secret().map(|sk| {
                         kids.as_array().into_iter().flatten().filter_map(Value::as_str).map(|kid| (kid.to_string(), presence_seal::key(&sk, &subject, kid))).collect()
                     });
-                    let pk = p["to"].as_str().and_then(|to| self.key_agreement_of(to));
+                    let pk = p["to"].as_str().and_then(|to| self.key_agreement_of(to, now));
                     if let (Some(keys), Some(pk)) = (keys, pk) {
                         p["presence_keys"] = presence_seal::seal_grant_keys(&p, &keys, &pk, &rand::random());
                     }
@@ -1310,7 +1331,7 @@ impl Core {
         p["expires_at"] = (now + ttl).into();
         if self.cfg.seal {
             // §10.4: seal to the DID in `to` when its key agreement key resolves (did:key, or a document key); else clear
-            if let Some(pk) = p["to"].as_str().and_then(|to| self.key_agreement_of(to)) {
+            if let Some(pk) = p["to"].as_str().and_then(|to| self.key_agreement_of(to, now)) {
                 dsip_schema::sealed::seal(&mut p, &pk, &rand::random());
             }
         }

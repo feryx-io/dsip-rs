@@ -390,6 +390,10 @@ impl<S: Store> Messenger<S> {
         let hint = hints.lookup(identity, &files, now).await.ok_or_else(|| {
             Error::NoMailbox(format!("no document for {identity}, and no verified hint on {} node(s)", hints.nodes().len()))
         })?;
+        // the key agreement delegation it carries: introductions to it are sealed to that key (core §7.3)
+        if let Some(ka) = &hint.key_agreement {
+            self.m.hold_key_agreement(ka, now);
+        }
         let entries = dsip_transport::hints::mailbox_entries(&hint);
         let choice = dsip_messaging::client::select_mailbox(&json!({"hint_entries": entries}));
         let did = choice["selected"].as_str().ok_or_else(|| Error::NoMailbox(format!("{identity}'s hint names no usable mailbox: {choice}")))?.to_string();

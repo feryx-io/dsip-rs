@@ -169,6 +169,11 @@ impl Runner {
             Cmd::HoldGrant { grant, reply } => {
                 let _ = reply.send(self.agent.hold_grant(&grant).await.map_err(Into::into));
             }
+            Cmd::HoldKeyAgreement(credential) => {
+                if !self.agent.hold_key_agreement(&credential) {
+                    tracing::debug!("a hint's key agreement delegation did not verify");
+                }
+            }
             Cmd::Revoke { identity, reply } => {
                 let now = dsip_transport::now_s();
                 let ids: Vec<String> = self.agent.endpoint().contacts.grants_issued.iter()

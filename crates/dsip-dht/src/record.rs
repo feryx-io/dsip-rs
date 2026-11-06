@@ -109,6 +109,8 @@ pub struct Hint {
     pub signer: String,
     /// The exact frame (for forwarding and storage).
     pub frame: String,
+    /// The subject's key agreement delegation the hint carried, verified (DHT Hints Profile §2; core §7.3).
+    pub key_agreement: Option<Value>,
 }
 
 /// Outcome of comparing a verified input against an existing record (§8.3).
@@ -197,6 +199,7 @@ pub fn evaluate(frame: &str, ctx: &Context, existing: Option<&Envelope>) -> Eval
         expires_at: p["expires_at"].as_i64().unwrap_or(0),
         signer: ver.signer_did.clone(),
         frame: frame.to_string(),
+        key_agreement: p.get("key_agreement").cloned(),
     };
     let (mut winner, mut conflict) = ("input", Conflict::None);
     if let Some(ex_env) = existing {

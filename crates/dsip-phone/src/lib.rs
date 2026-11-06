@@ -154,6 +154,7 @@ enum Cmd {
     Unwatch(String),
     Grant { request: GrantRequest, reply: oneshot::Sender<Result<Option<String>>> },
     HoldGrant { grant: String, reply: oneshot::Sender<Result<bool>> },
+    HoldKeyAgreement(serde_json::Value),
     Revoke { identity: String, reply: oneshot::Sender<Result<usize>> },
     Wake { ask: WakeAsk, reply: oneshot::Sender<Result<dsip_transport::wake::Answer>> },
     Close,
@@ -240,6 +241,10 @@ impl Phone {
             return None; // §8.1 rule 6: an identity with a document is reached as its document says, never by a hint
         }
         let hint = hints.lookup(to, &dsip_core::did::StaticResolver::default(), dsip_transport::now_s()).await?;
+        // the key agreement delegation it carries: what we seal to `to` goes to that key (§7.3, spec-gap 179)
+        if let Some(ka) = hint.key_agreement.clone() {
+            self.line.send(Cmd::HoldKeyAgreement(ka));
+        }
         let relay = dsip_transport::hints::relay_of(&hint)?;
         tracing::info!("hint for {to}: relay {relay}, seq {}, signed by {} (a hint, not authority, §8.1)", hint.seq, hint.signer);
         (relay != self.relay_url).then_some(relay)

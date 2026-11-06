@@ -9,6 +9,7 @@ repository.workspace = true
 rust-version = "1.91"
 
 [dependencies]
+dsip-schema.workspace = true
 dsip-core.workspace = true
 dsip-endpoint.workspace = true
 dsip-messaging.workspace = true
