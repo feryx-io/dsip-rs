@@ -7,6 +7,59 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+## [2026-11-07] — workspace release
+
+The device side of waking (app plan stage A5d). DSIP spec: `poc-v1.0.4`, unchanged (DSIP Core 1.0; 2,476 vectors, 0
+failures).
+
+| Crate | Version |
+|---|---|
+| `dsip-broadcast` | 0.1.1 |
+| `dsip-cli` | 0.2.0 |
+| `dsip-core` | 0.1.0 |
+| `dsip-dht` | 0.1.0 |
+| `dsip-endpoint` | 0.3.0 |
+| `dsip-events` | 0.2.0 |
+| `dsip-gateway` | 0.1.0 |
+| `dsip-kt` | 0.1.0 |
+| `dsip-mailbox` | 0.4.0 |
+| `dsip-media` | 0.1.1 |
+| `dsip-messaging` | 0.3.1 |
+| `dsip-messaging-device` | 0.3.0 |
+| `dsip-messenger` | 0.3.0 (was 0.2.0) |
+| `dsip-mls` | 0.1.0 |
+| `dsip-node` | 0.1.1 |
+| `dsip-number` | 0.1.0 |
+| `dsip-phone` | 0.4.0 (was 0.3.0) |
+| `dsip-push` | 0.1.0 |
+| `dsip-recording` | 0.1.0 |
+| `dsip-relay` | 0.3.1 |
+| `dsip-schema` | 0.1.1 |
+| `dsip-session` | 0.2.0 |
+| `dsip-testkit` | 0.3.0 (was 0.2.0) |
+| `dsip-transport` | 0.6.0 (was 0.5.0) |
+| `dsip-wake` | 0.2.0 (was 0.1.1) |
+| `dsip-wasm` | 0.1.0 |
+| `dsip-webrtc-binding` | 0.1.0 |
+
+**Breaking changes** (#37): `dsip_transport::agent::AgentEvent` has a new variant, `Reply`, and
+`dsip_transport::wake::WakeError` a new variant, `Refused`; a `match` on either without a wildcard needs an arm. The
+services are unchanged in behaviour: `dsip-relay` 0.3.1, `dsip-mailbox` 0.4.0, `dsip-push` 0.1.0, `dsip-node` 0.1.1 and
+`dsip-web` 0.1.1 are rebuilt.
+
+### Added
+
+- The device side of the Wake Profile (W§3, W§4.2), for the app (#37):
+  - `dsip_transport::wake::enrol` (`wake-enrol` at a gateway; the handle) and `read_reply` (a waker's answer, verified
+    against its documents).
+  - `dsip_wake::registration` (a device's signed `WakeRegistration`) and `seal_keys` (the X25519 key a call's hint is
+    sealed to).
+  - `Agent::request` and `Agent::read_reply`: a request on the binding whose answer comes back to the host as
+    `AgentEvent::Reply` (the endpoint's pipeline knows only the core's types and drops `wake-accepted`).
+  - `Phone::relay_did`, `relay_wake`, `wake_register`, `wake_remove`; `Messenger::mailbox_wake`, `wake_register`,
+    `wake_remove` (the mailbox's owner operation, spec-gap 176).
+  - `dsip_testkit::PushGateway` (dsip-push over local HTTPS with the recording provider) and `Network::waking`.
+
 ## [2026-11-06] — workspace release
 
 dsip-rs builds on Windows (found building dsip-app there, app plan stage A3). DSIP spec: `poc-v1.0.4`, unchanged
