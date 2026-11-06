@@ -163,25 +163,55 @@ impl Identity {
         let payload = delegation_payload(did, &self.device.did(), now - 60, now + 365 * 86_400, &caps_ref);
         self.delegation = sign(&payload, &self.controller, &kid);
         self.meta.identity = did.to_string();
-        let multibase = self.controller.did().trim_start_matches("did:key:").to_string();
-        let mut doc = serde_json::json!({
-            "@context": ["https://www.w3.org/ns/did/v1", "https://w3id.org/security/multikey/v1"],
-            "id": did,
-            "verificationMethod": [{"id": kid, "type": "Multikey", "controller": did, "publicKeyMultibase": multibase}],
-            "authentication": [kid],
-            "assertionMethod": [kid],
-        });
-        if !also_known_as.is_empty() {
-            doc["alsoKnownAs"] = serde_json::json!(also_known_as);
-        }
         write(&self.dir.join("delegation.json"), self.delegation.frame())?;
         write(&self.dir.join("identity.json"), serde_json::to_string_pretty(&self.meta)?)?;
-        write(&self.dir.join("did.json"), serde_json::to_string_pretty(&doc)?)?;
         // a key agreement delegation names its subject: the new identity's is issued under it, for the same key
         if let Some(secret) = self.key_agreement.as_ref().map(|k| k.secret) {
             self.issue_key_agreement(secret, now)?;
         }
+        let doc = self.did_web_document(None, None, also_known_as);
+        write(&self.dir.join("did.json"), serde_json::to_string_pretty(&doc)?)?;
         Ok(())
+    }
+
+    /// The DID document a `did:web` identity serves (§7.2): its identity key as `#key-1`; its key agreement key under
+    /// `keyAgreement` (the delegated one when it holds one, §7.3, else the one derived from the identity key, M§6.9),
+    /// since a document's is authoritative and senders never take a `did:web`'s from a hint (§8.1); a `DSIPSignaling`
+    /// service for `relay` (§13.2) and a `DSIPMailbox` service for `mailbox` (`(DID, URI)`, M§4.2) when given; and
+    /// `also_known_as`.
+    ///
+    /// Spec: §7.2, §7.3, §8.1, §13.2, M§4.2, M§6.9.
+    pub fn did_web_document(&self, relay: Option<&str>, mailbox: Option<(&str, &str)>, also_known_as: &[String]) -> serde_json::Value {
+        let did = self.meta.identity.as_str();
+        let kid = format!("{did}#key-1");
+        let x25519 = dsip_core::hpke::x25519_public(&self.key_agreement_secret());
+        let mut doc = serde_json::json!({
+            "@context": ["https://www.w3.org/ns/did/v1", "https://w3id.org/security/multikey/v1"],
+            "id": did,
+            "verificationMethod": [{"id": kid, "type": "Multikey", "controller": did,
+                                    "publicKeyMultibase": dsip_core::did::multibase_ed25519(&self.controller.public())}],
+            "authentication": [kid],
+            "assertionMethod": [kid],
+            "keyAgreement": [{"id": format!("{did}#key-agreement-1"), "type": "Multikey", "controller": did,
+                              "publicKeyMultibase": dsip_core::did::multibase_x25519(&x25519)}],
+        });
+        let mut services = vec![];
+        if let Some(uri) = relay {
+            services.push(serde_json::json!({"id": format!("{did}#dsip"), "type": "DSIPSignaling",
+                                             "serviceEndpoint": {"uri": uri, "bindings": ["ws/1.0"]}}));
+        }
+        if let Some((mailbox_did, uri)) = mailbox {
+            services.push(serde_json::json!({"id": format!("{did}#dsip-mailbox"), "type": "DSIPMailbox",
+                "serviceEndpoint": {"uri": uri, "bindings": ["ws/1.0"], "mailbox": mailbox_did, "priority": 0,
+                                    "profiles": ["messaging/1.0"], "accepts": ["text", "audio"]}}));
+        }
+        if !services.is_empty() {
+            doc["service"] = serde_json::json!(services);
+        }
+        if !also_known_as.is_empty() {
+            doc["alsoKnownAs"] = serde_json::json!(also_known_as);
+        }
+        doc
     }
 
     /// Load an identity directory.
@@ -334,6 +364,29 @@ mod tests {
             assert_eq!(std::fs::metadata(dir.join(f)).unwrap().permissions().mode() & 0o777, 0o600, "{f}");
         }
         assert_eq!(Identity::load(&dir).unwrap().device.did(), made.device.did(), "and still read back");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_did_web_document_names_the_relay_the_mailbox_and_the_delegated_key_agreement_key() {
+        let dir = std::env::temp_dir().join(format!("dsip-identity-web-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut id = Identity::init(&dir, "Ann", None, None).unwrap();
+        let secret = id.derived_key_agreement_secret(0);
+        id.issue_key_agreement(secret, crate::now_s()).unwrap();
+        id.rehome_did_web("did:web:ann.example.com", &[]).unwrap();
+        let ka = id.key_agreement.clone().unwrap();
+        assert_eq!(ka.secret, secret, "the same key, re-issued for the new subject");
+        let doc = id.did_web_document(Some("wss://relay.example.com/dsip"), Some(("did:web:mbx.example.com", "wss://mbx.example.com/dsip")), &[]);
+        let parsed: dsip_core::did::DidDocument = serde_json::from_value(doc).unwrap();
+        assert_eq!(parsed.id, "did:web:ann.example.com");
+        assert_eq!(parsed.signaling_uri().as_deref(), Some("wss://relay.example.com/dsip"));
+        assert_eq!(parsed.x25519_key_agreement(), Some(ka.public()), "the delegated key, not the derived one");
+        assert_eq!(parsed.ed25519_key("did:web:ann.example.com#key-1", "key-1"), Some(id.controller.public()));
+        assert!(parsed.service.iter().any(|s| s.service_type == "DSIPMailbox"));
+        // rehome wrote one too, with the key agreement key and no services
+        let written: dsip_core::did::DidDocument = serde_json::from_str(&std::fs::read_to_string(dir.join("did.json")).unwrap()).unwrap();
+        assert_eq!(written.x25519_key_agreement(), Some(ka.public()));
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
