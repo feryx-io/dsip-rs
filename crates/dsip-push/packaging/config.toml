@@ -3,7 +3,7 @@
 # key, and unknown keys are an error. The template with every key explained: /usr/share/doc/dsip-push/config.example.toml.
 
 did = "did:web:push.example.com"                   # the gateway's DID: it serves the document at https://<host>/.well-known/did.json
-app = ["fcm:example-project"]                      # provider:app, repeatable: apns:<bundle id>.voip, fcm:<Firebase project id>
+app = ["fcm:example-project"]                      # provider:app, repeatable: apns:<bundle id>.voip (calls), apns:<bundle id> (messages), fcm:<Firebase project id>
 listen = "0.0.0.0:8445"                            # a did:web without a port is fetched from 443: see below
 state = "/var/lib/dsip-push"                       # its signing key seed, its handle key, and the certificate
 
