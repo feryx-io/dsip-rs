@@ -7,6 +7,73 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+## [2026-11-08] — workspace release
+
+Key agreement delegation (DSIP spec-gap 179), the push gateway's APNs message topic (spec-gap 178), and identity key
+files readable by their owner alone. DSIP spec: `poc-v1.0.5` (was `poc-v1.0.4`; DSIP Core 1.0; 2,513 vectors, 0
+failures).
+
+| Crate | Version |
+|---|---|
+| `dsip-broadcast` | 0.1.1 |
+| `dsip-cli` | 0.3.0 (was 0.2.0) |
+| `dsip-core` | 0.2.0 (was 0.1.0, now its own version line) |
+| `dsip-dht` | 0.2.0 (was 0.1.0, now its own version line) |
+| `dsip-endpoint` | 0.4.0 (was 0.3.0) |
+| `dsip-events` | 0.2.0 |
+| `dsip-gateway` | 0.1.0 |
+| `dsip-kt` | 0.1.0 |
+| `dsip-mailbox` | 0.4.0 |
+| `dsip-media` | 0.1.1 |
+| `dsip-messaging` | 0.4.0 (was 0.3.1) |
+| `dsip-messaging-device` | 0.4.0 (was 0.3.0) |
+| `dsip-messenger` | 0.4.0 (was 0.3.0) |
+| `dsip-mls` | 0.1.0 |
+| `dsip-node` | 0.1.1 |
+| `dsip-number` | 0.1.0 |
+| `dsip-phone` | 0.5.0 (was 0.4.0) |
+| `dsip-push` | 0.1.1 (was 0.1.0) |
+| `dsip-recording` | 0.1.0 |
+| `dsip-relay` | 0.3.1 |
+| `dsip-schema` | 0.2.0 (was 0.1.1) |
+| `dsip-session` | 0.2.0 |
+| `dsip-testkit` | 0.3.0 |
+| `dsip-transport` | 0.7.0 (was 0.6.0) |
+| `dsip-wake` | 0.2.0 |
+| `dsip-wasm` | 0.1.0 |
+| `dsip-webrtc-binding` | 0.1.0 |
+
+**Breaking changes:**
+- `dsip_core::RejectCode` has a new variant, `KeyAgreementInvalid` (#42).
+- `dsip_dht::record::Hint` has a new public field, `key_agreement` (#43).
+- `dsip_transport::identity::Identity` has a new public field, `key_agreement` (#43).
+
+A `match` without a wildcard, or a struct literal, needs the new item. The services are unchanged in behaviour, except
+that `dsip-push` sends a message push on the handle's own topic: `dsip-relay` 0.3.1, `dsip-mailbox` 0.4.0,
+`dsip-push` 0.1.1, `dsip-node` 0.1.1 and `dsip-web` 0.1.1 are rebuilt.
+
+### Added
+- Key agreement delegation (core §7.3, spec-gap 179): an identity-signed `KeyAgreementDelegation` names an independent
+  X25519 key, so an identity's devices open what is sealed to it without holding its signing key.
+  - `dsip_schema::key_agreement` (#42): verify, choose the current one, and give a DID's recipient key (its document's,
+    else the delegation's, else the did:key derived key).
+  - `dsip-dht` refuses a hint whose `key_agreement` member does not verify; the vector runner runs `key-agreement/`.
+  - `Identity` (#43):
+    - holds one (`key-agreement.json`, 0600);
+    - `issue_key_agreement`, and `derived_key_agreement_secret(n)`, derived from the identity key so every device
+      holding it derives the same key;
+    - `key_agreement_secret(s)` for opening.
+  - `Core::hold_key_agreement`, and sealing to the held key: sealed bodies, a grant's presence keys, and the
+    messenger's introductions.
+  - The phone and the messenger take the credential from the hints they look up.
+  - `hints::reachability_with` carries it.
+  - `received_with`, `open_sealed_introduction_with`, `engine_identity_with`.
+
+### Fixed
+- `dsip-push`: an APNs message push goes on the handle's own topic (the alert token's), not the VoIP topic with `.voip`
+  stripped, which APNs refused (spec-gap 178; #39).
+- `Identity::init` writes `controller.key` and `device.key` readable by their owner alone (0600; #41).
+
 ## [2026-11-07] — workspace release
 
 The device side of waking (app plan stage A5d). DSIP spec: `poc-v1.0.4`, unchanged (DSIP Core 1.0; 2,476 vectors, 0

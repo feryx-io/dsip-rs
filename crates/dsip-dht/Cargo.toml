@@ -1,7 +1,7 @@
 [package]
 name = "dsip-dht"
 description = "DSIP DHT reachability hints (experimental, §8.5): signed hint records over libp2p Kademlia, verified, never authoritative"
-version.workspace = true
+version = "0.2.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
