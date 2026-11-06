@@ -88,7 +88,17 @@ vectors first: a stage that needs protocol waits for its vectors, Python, impl-t
   never leaves the Enclave. `ThisDeviceOnly` keeps it off backups and iCloud; a synchronizable item lets iCloud
   Keychain carry it, end to end encrypted, to the person's other Apple devices (decision 5). The identity key is the hard part: it signs
   every delegation, and a `did:key` identity cannot rotate (§7.5), so losing it is losing the identity. The stage
-  decides where it lives (decision 5) and gives a backup a person can actually keep.
+  decides where it lives (decision 5) and gives a backup a person can actually keep. In parts:
+  - *A6a, keys at rest*: the device and identity keys sealed under each platform's protection instead of the files
+    an owner alone reads. The Keychain on macOS and iOS (available after first unlock, so a push wakes a locked
+    phone; this device only), an Android Keystore key wrapping the seeds, DPAPI on Windows, the Secret Service on
+    Linux (a file its owner alone reads where there is none); keys already in files moved in, and the files removed.
+  - *A6b, export and restore*: the identity key and its metadata in an export sealed under a passphrase (a memory-hard
+    KDF), kept as a file or a printed code; a new install restores from it.
+  - *A6c, another device*: a second install reads the export only to sign its own device's delegation, then keeps
+    the device key alone (decision 5 (a)); a lost device's delegation revoked (§7.5).
+  - *A6d, what is offered*: the identity key in the platform's end-to-end encrypted keychain sync (decision 5 (d)),
+    and re-homing on a `did:web` the person controls (decision 5 (c); `Identity::rehome_did_web`).
 - **A7. Release.** Accessibility, localization, store listings, TestFlight and Play, signed builds of all five from
   one tag.
 
@@ -119,8 +129,8 @@ vectors first: a stage that needs protocol waits for its vectors, Python, impl-t
    export: every device, the first included, runs on a delegation, and adding a device needs the export. (c) A
    `did:web` identity by default for people with a domain, which can rotate (§7.5). (d) A platform's end-to-end
    encrypted keychain sync (iCloud Keychain on Apple, Google's on Android) as the backup, for people who stay on one
-   platform. *Draft: (a) for 1.0, (c) and (d) offered; a recovery design that needs no file and no platform is a
-   later profile.*
+   platform. *Decided (2026-11-06): (a) for 1.0, (c) and (d) offered; a recovery design that needs no file and no
+   platform is a later profile.*
 6. **The push gateway.** (a) The publisher runs one `dsip-push` for the official app; any relay or mailbox can use it
    through tokens bound to them. (b) Every operator runs their own, and builds the app with their own push keys, as
    a branded Anvil does. *Draft: (a) for the official app, (b) possible for branded builds.*
