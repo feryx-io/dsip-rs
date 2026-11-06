@@ -67,6 +67,9 @@ pub enum RejectCode {
     GrantUnknownIntroduction,
     HelloInReplyToMismatch,
     HintSubjectMismatch,
+    /// A hint whose `key_agreement` member is not a key agreement delegation of its subject (DHT Hints Profile §4; §7.3,
+    /// spec-gap 179).
+    KeyAgreementInvalid,
     PublisherMismatch,
     StreamIdNamespace,
     RotationSubjectMismatch,

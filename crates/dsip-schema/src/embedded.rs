@@ -35,6 +35,7 @@ pub const SCHEMAS: &[(&str, &str)] = &[
     schema!("key-rotation"),
     schema!("delegation-revocation"),
     schema!("reachability-hint"),
+    schema!("key-agreement-delegation"),
     schema!("alias-monitor"),
     schema!("presence"),
     schema!("grant-revocation"),

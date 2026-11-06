@@ -141,6 +141,7 @@ fn run_one(v: &Value) -> Result<(bool, Value, Value)> {
         "device-events" => dsip_events::run_vector(v),
         "recording" => dsip_recording::run_vector(v),
         "wake" => dsip_wake::run_vector(v),
+        "key-agreement" => dsip_schema::key_agreement::run_vector(v),
         "tn-binding" => dsip_number::run_vector(v),
         "alias-transparency" => dsip_kt::run_vector(v),
         "pkarr" => dsip_core::pkarr::run_vector(v),

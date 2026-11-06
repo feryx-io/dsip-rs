@@ -15,6 +15,7 @@
 #![forbid(unsafe_code)]
 
 pub mod embedded;
+pub mod key_agreement;
 pub mod sealed;
 pub mod semantic;
 pub mod validate;
