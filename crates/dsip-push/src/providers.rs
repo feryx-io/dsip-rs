@@ -3,7 +3,7 @@
 //! (tests, demos, a gateway being set up).
 //!
 //! Spec: W§5.3 — the class decides the push (`call`: APNs `voip` push type, topic the handle's app; FCM high priority;
-//! `message`: APNs `alert` with `mutable-content`, topic the app's bundle ID; FCM high priority), the expiry is
+//! `message`: APNs `alert` with `mutable-content`, topic the handle's app; FCM high priority), the expiry is
 //! `deliver_by`, the app's data is the compact JSON `{"dsip-wake": …}` (APNs: a top-level key beside `aps`; FCM: the
 //! data field `dsip-wake` holding it as a string), and a token the provider reports unknown (APNs 410, FCM
 //! `UNREGISTERED`) ends the handle.
@@ -162,12 +162,14 @@ impl Apns {
         let host = if h.environment.as_deref() == Some("sandbox") { &self.sandbox } else { &self.production };
         let data = &forward["data"]["dsip-wake"];
         let call = forward["class"] == "call";
-        let (push_type, topic, mut body) = if call {
-            ("voip", h.app.clone(), json!({}))
+        // The topic is the handle's app either way: an iOS device enrols its VoIP token on `<bundle>.voip` and its alert
+        // token on `<bundle>` apart, as APNs takes each token for its own topic only (spec-gap 178).
+        let (push_type, mut body) = if call {
+            ("voip", json!({}))
         } else {
-            let bundle = h.app.strip_suffix(".voip").unwrap_or(&h.app).to_string();
-            ("alert", bundle, json!({"aps": {"alert": {"title-loc-key": "DSIP_NEW_MESSAGE"}, "mutable-content": 1}}))
+            ("alert", json!({"aps": {"alert": {"title-loc-key": "DSIP_NEW_MESSAGE"}, "mutable-content": 1}}))
         };
+        let topic = h.app.clone();
         body["dsip-wake"] = data.clone();
         let headers = vec![
             ("apns-push-type", push_type.to_string()),
@@ -355,9 +357,9 @@ mod tests {
     }
 
     #[test]
-    fn a_message_is_a_mutable_alert_on_the_bundle_topic() {
+    fn a_message_is_a_mutable_alert_on_the_alert_tokens_topic() {
         let (a, _) = apns();
-        let h = Handle { key: "k".into(), provider: "apns".into(), app: "org.dsip.app.voip".into(), token: "ab12".into(), environment: None };
+        let h = Handle { key: "k".into(), provider: "apns".into(), app: "org.dsip.app".into(), token: "ab12".into(), environment: None };
         let (url, headers, body) = a.request(&h, &forward("message", "message"));
         assert!(url.starts_with("https://api.push.apple.com/"));
         assert!(headers.contains(&("apns-push-type", "alert".into())));

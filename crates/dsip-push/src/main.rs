@@ -41,7 +41,7 @@ struct Args {
     /// TLS private key (PEM).
     #[arg(long, requires = "cert")]
     key: Option<PathBuf>,
-    /// An app this gateway pushes for, `provider:app` (repeatable): `apns:org.example.app.voip`, `fcm:my-project`.
+    /// An app this gateway pushes for, `provider:app` (repeatable): `apns:org.example.app.voip` (calls), `apns:org.example.app` (messages), `fcm:my-project`.
     #[arg(long = "app", required = true)]
     apps: Vec<String>,
     /// The APNs signing key (`AuthKey_XXXXXXXXXX.p8`).
