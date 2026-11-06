@@ -10,6 +10,7 @@ rust-version.workspace = true
 [dependencies]
 dsip-broadcast.workspace = true
 dsip-core.workspace = true
+dsip-wake.workspace = true
 dsip-endpoint.workspace = true
 dsip-session.workspace = true
 dsip-transport.workspace = true

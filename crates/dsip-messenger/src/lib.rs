@@ -212,7 +212,7 @@ pub struct Messenger<S: Store> {
     reconnect_ceiling: i64,
     seen: SeenIds,
     /// Answers awaited by request id, taken off the connection before the engine sees them.
-    replies: HashMap<String, Option<Value>>,
+    replies: HashMap<String, Option<(Value, String)>>,
     jobs: Vec<Job>,
     /// Blob fetches to try again (spec-gap 106): `{object, blobs, sender, attempt, next_at}`, persisted.
     pending_blobs: Vec<Value>,
@@ -539,6 +539,11 @@ impl<S: Store> Messenger<S> {
     /// Send `frame`, a request to this device's own mailbox, and wait for its answer, processing every other frame as
     /// it comes.
     pub async fn request(&mut self, host: &mut impl Host<S>, frame: &str) -> Result<Value> {
+        Ok(self.request_frame(host, frame).await?.0)
+    }
+
+    /// [`Messenger::request`], with the answer's frame as it came beside its payload, for a caller that verifies it.
+    async fn request_frame(&mut self, host: &mut impl Host<S>, frame: &str) -> Result<(Value, String)> {
         let id = frame_id(frame);
         self.replies.insert(id.clone(), None);
         let answer = async {
@@ -556,6 +561,38 @@ impl<S: Store> Messenger<S> {
         .await;
         self.replies.remove(&id);
         answer
+    }
+
+    /// What our mailbox said of waking devices in its `hello` (`{"profiles": ["wake/0.1"], "kinds": ["message"]}`), or
+    /// `None` when it does not wake them, or this messenger is not connected: then it is sent no `wake-register`.
+    /// Spec: W§4.4.
+    pub fn mailbox_wake(&self) -> Option<&Value> {
+        self.conn.as_ref().and_then(|c| c.relay.capabilities.get("wake"))
+    }
+
+    /// Register this device with our mailbox to be woken for messages (W§4.2; the mailbox's owner operation, spec-gap
+    /// 176): `registration` is the device's signed `WakeRegistration` naming the mailbox, `kinds` the kinds wanted (none:
+    /// every kind). A mailbox seals no hint, so no seal key goes. Returns its verified answer: `Accepted`, or `Refused` with
+    /// its reason. Spec: W§4.2, W§4.3.
+    pub async fn wake_register(&mut self, host: &mut impl Host<S>, registration: Value, kinds: Option<Vec<String>>)
+        -> Result<dsip_transport::wake::Answer> {
+        let kinds: Option<Vec<&str>> = kinds.as_ref().map(|k| k.iter().map(String::as_str).collect());
+        let msg = dsip_wake::register_message(&self.cfg.device.did(), &self.cfg.mailbox.0, &registration, None, kinds.as_deref(), Self::now() as i64);
+        self.wake_request(host, msg).await
+    }
+
+    /// End this device's registration at our mailbox (`remove: true`, W§4.2).
+    pub async fn wake_remove(&mut self, host: &mut impl Host<S>) -> Result<dsip_transport::wake::Answer> {
+        let msg = dsip_wake::remove_message(&self.cfg.device.did(), &self.cfg.mailbox.0, Self::now() as i64);
+        self.wake_request(host, msg).await
+    }
+
+    async fn wake_request(&mut self, host: &mut impl Host<S>, msg: Value) -> Result<dsip_transport::wake::Answer> {
+        let id = msg["id"].as_str().unwrap_or_default().to_string();
+        let frame = dsip_core::envelope::sign(&msg, &self.cfg.device, &self.cfg.device.kid()).frame();
+        let (_, answer) = self.request_frame(host, &frame).await?;
+        let r = resolver(&self.cfg.resolver_files);
+        Ok(dsip_transport::wake::read_reply(&self.cfg.mailbox.0, &r, &answer, &id, Self::now() as i64)?)
     }
 
     /// The next frame from the mailbox, or `None` for a closed connection; pending for ever while offline. Cancel-safe:
@@ -587,7 +624,7 @@ impl<S: Store> Messenger<S> {
         let p = Envelope::from_frame(frame).ok().and_then(|e| wire::payload_of(&e)).unwrap_or_default();
         if let Some(slot) = p["in_reply_to"].as_str().and_then(|id| self.replies.get_mut(id)) {
             if slot.is_none() && p["type"] != "items" {
-                *slot = Some(p);
+                *slot = Some((p, frame.to_string()));
                 return;
             }
         }

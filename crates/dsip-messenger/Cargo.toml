@@ -14,6 +14,7 @@ dsip-messaging.workspace = true
 dsip-messaging-device.workspace = true
 dsip-mls.workspace = true
 dsip-transport.workspace = true
+dsip-wake.workspace = true
 rand.workspace = true
 reqwest.workspace = true
 rustls.workspace = true

@@ -333,6 +333,22 @@ pub fn registration_payload(key: &str, waker: &str, gateway: &str, handle: &str,
            "issued_at": issued_at, "expires_at": expires_at})
 }
 
+/// A device's `WakeRegistration` for `waker` (W§4.1), signed by `wake_key` (the key it enrolled `handle` with at
+/// `gateway`) and good for W-Registration from `now`: what `wake-register` carries, as JSON.
+/// Spec: W§4.1, W§7.
+pub fn registration(wake_key: &dsip_core::keys::KeyPair, waker: &str, gateway: &str, handle: &str, now: i64) -> Value {
+    let p = registration_payload(&wake_key.did(), waker, gateway, handle, now, now + W_REGISTRATION_S);
+    serde_json::to_value(envelope::sign(&p, wake_key, &wake_key.kid())).expect("an envelope is JSON")
+}
+
+/// A fresh seal secret for a device (W§6) and its X25519 public key, the `seal_key` it registers with a relay; the
+/// secret opens the hints sealed to it ([`open_hint`]). Spec: W§4.2, W§6. Impl: the secret's 32 bytes are a fresh
+/// Ed25519 seed (the system's random number generator, as every key here).
+pub fn seal_keys() -> ([u8; 32], [u8; 32]) {
+    let secret = dsip_core::keys::KeyPair::generate().seed();
+    (secret, hpke::x25519_public(&secret))
+}
+
 /// A `wake-register` payload from `device` to `waker`, carrying a signed registration. Spec: W§4.2
 pub fn register_message(device: &str, waker: &str, registration: &Value, seal_key: Option<&[u8; 32]>, kinds: Option<&[&str]>, now: i64) -> Value {
     let mut f = json!({"registration": registration});

@@ -619,6 +619,8 @@ pub async fn run(opts: ConsoleOpts, mode: Mode) -> Result<()> {
                     match ev {
                         // the grant's Sent follows and is printed
                         AgentEvent::GrantIssued { .. } => {}
+                        // the console sends no request whose answer comes back as a reply
+                        AgentEvent::Reply { .. } => {}
                         AgentEvent::Sent { msg_type, session, to } => {
                             println!("→ {msg_type:<8} to {}  session …{}", short(&to), sid8(&session));
                             print_state(&agent, &session);

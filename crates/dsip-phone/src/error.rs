@@ -16,6 +16,12 @@ pub enum Error {
     #[cfg(feature = "media")]
     #[error("media: {0}")]
     Media(#[from] dsip_media::Error),
+    /// A request to the relay got no answer in time.
+    #[error("{0} got no answer from the relay")]
+    NoAnswer(&'static str),
+    /// The relay's answer to a request did not verify.
+    #[error(transparent)]
+    Wake(#[from] dsip_transport::wake::WakeError),
     /// The phone has closed.
     #[error("the phone has closed")]
     Closed,
