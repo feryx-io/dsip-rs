@@ -11,7 +11,7 @@
 //! hold the key to the identity.
 
 use dsip_core::envelope::{verify_raw, Context, Envelope};
-use dsip_messaging::first_contact::open_sealed_introduction;
+use dsip_messaging::first_contact::open_sealed_introduction_with;
 use serde_json::{json, Value};
 
 /// An introduction this device holds as a request (M§14.1: requests, never messages).
@@ -74,6 +74,14 @@ pub enum Received {
 /// signature, and its signer bound to `from`, §7.4), then read. `seed` is the identity key's seed, when this device
 /// holds it, which the sealed purpose opens with (M§6.9, spec-gap 55).
 pub fn received(item: &Value, to: &str, ctx: &Context, now: i64, seed: Option<&[u8; 32]>) -> Received {
+    let secrets: Vec<[u8; 32]> = seed.map(dsip_messaging::first_contact::x25519_from_ed25519_seed).into_iter().collect();
+    received_with(item, to, ctx, now, &secrets)
+}
+
+/// As [`received`], with the identity's X25519 key agreement secrets (none: this device opens no sealed purpose): a
+/// sealed introduction opens with the first that opens it, the delegated key before the derived one (core §7.3,
+/// spec-gap 179).
+pub fn received_with(item: &Value, to: &str, ctx: &Context, now: i64, secrets: &[[u8; 32]]) -> Received {
     let class = item["class"].as_str().unwrap_or("");
     let compact = item["envelope"].as_str().unwrap_or("");
     let mut parts = compact.split('.');
@@ -102,15 +110,23 @@ pub fn received(item: &Value, to: &str, ctx: &Context, now: i64, seed: Option<&[
         let sealed = p.get("sealed").is_some();
         // M§14.1: checked whether or not this device can open it
         let checked = dsip_messaging::first_contact::check_introduction(&p);
-        let opened = match seed {
-            Some(seed) if checked["verdict"] == "accept" => open_sealed_introduction(&p, seed),
+        let opened = match secrets.split_first() {
+            Some((first, rest)) if checked["verdict"] == "accept" => {
+                let try_one = |sk: &[u8; 32]| open_sealed_introduction_with(&p, sk);
+                let attempt = try_one(first);
+                if attempt["verdict"] == "accept" || !sealed {
+                    attempt
+                } else {
+                    rest.iter().map(try_one).find(|o| o["verdict"] == "accept").unwrap_or(attempt)
+                }
+            }
             _ => checked,
         };
         if opened["verdict"] != "accept" {
             return Received::BadIntroduction { id, from, code: opened["code"].as_str().unwrap_or("").to_string() };
         }
-        let purpose = match (sealed, seed) {
-            (true, None) => None,
+        let purpose = match (sealed, secrets.is_empty()) {
+            (true, true) => None,
             _ => Some(opened["purpose"].as_str().or(p["purpose"].as_str()).unwrap_or("").to_string()),
         };
         Received::Request(Request { id, from, purpose, sealed, payload: p })

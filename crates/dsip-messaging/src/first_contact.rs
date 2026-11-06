@@ -69,6 +69,14 @@ pub fn seal_introduction(p: &mut Value, purpose: &str, pk_r: &[u8; 32], sk_e: &[
 ///
 /// Spec: M§14.1, M§6.9.
 pub fn open_sealed_introduction(p: &Value, recipient_seed: &[u8; 32]) -> Value {
+    open_sealed_introduction_with(p, &x25519_from_ed25519_seed(recipient_seed))
+}
+
+/// As [`open_sealed_introduction`], with the recipient's X25519 key agreement secret itself: a key agreement
+/// delegation's (core §7.3, spec-gap 179), or one derived from an identity key.
+///
+/// Spec: M§14.1, M§6.9, §7.3.
+pub fn open_sealed_introduction_with(p: &Value, sk: &[u8; 32]) -> Value {
     let v = check_introduction(p);
     if v["verdict"] != "accept" {
         return v;
@@ -77,8 +85,7 @@ pub fn open_sealed_introduction(p: &Value, recipient_seed: &[u8; 32]) -> Value {
         return json!({"verdict": "accept", "purpose": p.get("purpose").cloned().unwrap_or(Value::Null)});
     };
     let d = |k: &str| sealed[k].as_str().and_then(dsip_core::b64::decode).unwrap_or_default();
-    let sk = x25519_from_ed25519_seed(recipient_seed);
-    let Some(pt) = hpke_open(&d("enc"), &sk, SEALED_INFO, &sealed_aad(p), &d("ct")) else {
+    let Some(pt) = hpke_open(&d("enc"), sk, SEALED_INFO, &sealed_aad(p), &d("ct")) else {
         return reject("sealed-open-failed", None);
     };
     let Ok(Value::Object(body)) = serde_json::from_slice::<Value>(&pt) else {

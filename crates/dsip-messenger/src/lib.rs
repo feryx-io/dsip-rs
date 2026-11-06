@@ -287,9 +287,26 @@ pub fn did_document(identity: &str, controller: &KeyPair, mailbox_did: &str, mai
 /// The identity JSON [`Engine::open`] takes: the identity, its device and controller seeds, the delegation to the
 /// device and a display name.
 pub fn engine_identity(identity: &str, device: &KeyPair, controller: &KeyPair, delegation: &Envelope, display_name: &str) -> String {
+    engine_identity_with(identity, device, controller, delegation, display_name, None)
+}
+
+/// As [`engine_identity`], with the X25519 secret of a key agreement key the identity delegated (core §7.3,
+/// spec-gap 179): sealed introductions open with it first.
+pub fn engine_identity_with(
+    identity: &str,
+    device: &KeyPair,
+    controller: &KeyPair,
+    delegation: &Envelope,
+    display_name: &str,
+    key_agreement: Option<&[u8; 32]>,
+) -> String {
     let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
-    json!({"identity": identity, "device_seed_hex": hex(&device.seed()), "delegation": delegation.frame(),
-           "controller_seed_hex": hex(&controller.seed()), "display_name": display_name}).to_string()
+    let mut v = json!({"identity": identity, "device_seed_hex": hex(&device.seed()), "delegation": delegation.frame(),
+           "controller_seed_hex": hex(&controller.seed()), "display_name": display_name});
+    if let Some(sk) = key_agreement {
+        v["key_agreement_secret_hex"] = json!(hex(sk));
+    }
+    v.to_string()
 }
 
 /// HTTPS for blobs, trusting the same anchors as the `wss` connections (M§5.6: TLS as in §13.2).
@@ -373,6 +390,10 @@ impl<S: Store> Messenger<S> {
         let hint = hints.lookup(identity, &files, now).await.ok_or_else(|| {
             Error::NoMailbox(format!("no document for {identity}, and no verified hint on {} node(s)", hints.nodes().len()))
         })?;
+        // the key agreement delegation it carries: introductions to it are sealed to that key (core §7.3)
+        if let Some(ka) = &hint.key_agreement {
+            self.m.hold_key_agreement(ka, now);
+        }
         let entries = dsip_transport::hints::mailbox_entries(&hint);
         let choice = dsip_messaging::client::select_mailbox(&json!({"hint_entries": entries}));
         let did = choice["selected"].as_str().ok_or_else(|| Error::NoMailbox(format!("{identity}'s hint names no usable mailbox: {choice}")))?.to_string();

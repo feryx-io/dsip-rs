@@ -242,7 +242,11 @@ impl Pending {
 /// Messaging Profile asks a device to keep (M§5.4, M§8.5). The host moves frames between it and the mailbox.
 pub struct Messenger<S: Store = MemoryStore> {
     keys: IdentityKeys,
-    controller_seed: Option<[u8; 32]>,
+    /// The identity's X25519 key agreement secrets, the delegated key's first (core §7.3, spec-gap 179).
+    key_agreement_secrets: Vec<[u8; 32]>,
+    /// Verified key agreement delegations of other identities, from their hints (core §7.3): introductions to them are
+    /// sealed to the key the current one names.
+    key_agreements: Vec<Value>,
     mls: Device<S>,
     mailbox: (String, String),
     resolver: StaticResolver,
@@ -368,12 +372,19 @@ impl<S: Store> Messenger<S> {
             display_name: id["display_name"].as_str().unwrap_or("").to_string(),
         };
         let controller_seed = id["controller_seed_hex"].as_str().and_then(|h| unhex(h).ok());
+        let key_agreement_secrets: Vec<[u8; 32]> = id["key_agreement_secret_hex"]
+            .as_str()
+            .and_then(|h| unhex(h).ok())
+            .into_iter()
+            .chain(controller_seed.map(|s| dsip_messaging::first_contact::x25519_from_ed25519_seed(&s)))
+            .collect();
         let mls = Device::with_provider(device, compact(&delegation), store);
         let st = state;
         let now_i = now as i64;
         let mut m = Messenger {
             keys,
-            controller_seed,
+            key_agreement_secrets,
+            key_agreements: vec![],
             mls,
             mailbox: (mailbox_did.to_string(), mailbox_uri.to_string()),
             resolver: StaticResolver::default(),
@@ -2707,6 +2718,20 @@ impl<S: Store> Messenger<S> {
         compact(&self.sign_delegated(&p))
     }
 
+    /// Hold another identity's key agreement delegation, when it verifies (its hint carries it): introductions to it
+    /// are sealed to its key from now on. Whether it was taken.
+    ///
+    /// Spec: core §7.3 (spec-gap 179).
+    pub fn hold_key_agreement(&mut self, credential: &Value, now: i64) -> bool {
+        let ctx = Context::new(now, &self.resolver);
+        if dsip_schema::key_agreement::verify(credential, &ctx, None).is_err() {
+            return false;
+        }
+        self.key_agreements.retain(|c| dsip_schema::key_agreement::verify(c, &ctx, None).is_ok() && c != credential);
+        self.key_agreements.push(credential.clone());
+        true
+    }
+
     /// An introduction to `target` asking permission to message (M§14.1), its purpose sealed to the key agreement key
     /// in `target`'s document (M§6.9) unless `plain`: the compact envelope the host deposits at `target`'s mailbox ([`Messenger::first_contact_frame`]), and the `mailbox-config` that tells this identity's own
     /// mailbox first, so the grant that answers it is not rate-limited there (spec-gap 81).
@@ -2716,11 +2741,13 @@ impl<S: Store> Messenger<S> {
             "to": target, "identity": {"display_name": self.keys.display_name}, "purpose": purpose, "issued_at": now,
             "expires_at": now + 7 * 86_400});
         if !plain {
-            // §7.2: a did:key's key agreement key is converted from the key itself; any other DID's is its document's
-            let pk = match dsip_core::did::public_from_did_key(target) {
-                Some(public) => dsip_core::hpke::x25519_from_ed25519_public(&public),
-                None => dsip_core::did::Resolver::resolve(&self.resolver, target).and_then(|d| d.x25519_key_agreement()),
-            };
+            // core §7.3, §10.4 rule 3: the document's key agreement key, else the current held delegation's, else for a
+            // did:key the derived key
+            let document = dsip_core::did::Resolver::resolve(&self.resolver, target)
+                .and_then(|d| d.x25519_key_agreement())
+                .map(|k| dsip_core::did::multibase_x25519(&k));
+            let ctx = Context::new(now, &self.resolver);
+            let pk = dsip_schema::key_agreement::recipient_key(target, document.as_deref(), &self.key_agreements, &ctx).map(|(_, k)| k);
             let pk = pk.ok_or_else(|| Error::from(format!("{target} publishes no key agreement key: introduce it plain")))?;
             let mut sk_e = [0u8; 32];
             sk_e.copy_from_slice(&KeyPair::generate().seed());
@@ -2912,7 +2939,7 @@ impl<S: Store> Messenger<S> {
     fn first_contact_in(&mut self, item: &Value, now: i64) -> Vec<Event> {
         let ctx = self.ctx(now);
         // sealed purposes (M§6.9) open with the identity's key agreement key, derived from the identity key (spec-gap 55)
-        let why = match first_contact::received(item, &self.keys.identity, &ctx, now, self.controller_seed.as_ref()) {
+        let why = match first_contact::received_with(item, &self.keys.identity, &ctx, now, &self.key_agreement_secrets) {
             first_contact::Received::Request(req) => {
                 let purpose = req.purpose.unwrap_or_else(|| "(sealed: this device holds no key agreement key)".to_string());
                 self.requests.insert(req.id.clone(), json!({"from": req.from, "purpose": purpose, "sealed": req.sealed,

@@ -83,3 +83,26 @@ fn grants_kept_for_messaging() {
     let got = received(&item("grant", &bob, &grant(json!(["dsip.call"]))), &alice.did(), &ctx, NOW, None);
     assert!(matches!(got, Received::NoMessageScope { ref from, .. } if *from == bob.did()), "{got:?}");
 }
+
+#[test]
+fn a_purpose_sealed_to_a_delegated_key_opens_with_it_and_one_sealed_to_the_derived_key_still_does() {
+    // core §7.3 (spec-gap 179): a device holding the delegated secret first, then the derived one
+    use dsip_messaging_device::first_contact::received_with;
+    let (alice, bob) = (KeyPair::from_fixture_name("alice"), KeyPair::from_fixture_name("bob"));
+    let resolver = StaticResolver::default();
+    let ctx = Context::new(NOW, &resolver);
+    let delegated = [7u8; 32];
+    let secrets = [delegated, x25519_from_ed25519_seed(&bob.seed())];
+    let opened = |pk: [u8; 32], secrets: &[[u8; 32]]| {
+        let mut p = introduction(&alice.did(), &bob.did(), "lunch?");
+        seal_introduction(&mut p, "lunch?", &pk, &[9; 32]);
+        match received_with(&item("introduction", &alice, &p), &bob.did(), &ctx, NOW, secrets) {
+            Received::Request(r) => r.purpose,
+            other => panic!("{other:?}"),
+        }
+    };
+    assert_eq!(opened(x25519_public(&delegated), &secrets), Some("lunch?".into()), "sealed to the delegated key");
+    assert_eq!(opened(x25519_public(&secrets[1]), &secrets), Some("lunch?".into()), "a sender that has not seen it");
+    // a device holding only the delegated key opens what is sealed to it, and nothing sealed to the derived key
+    assert_eq!(opened(x25519_public(&delegated), &secrets[..1]), Some("lunch?".into()));
+}
