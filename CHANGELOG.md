@@ -7,6 +7,52 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+## [2026-11-09] — workspace release
+
+The `did:web` document for an identity on its own domain (app plan A6d). DSIP spec: `poc-v1.0.5`, unchanged (2,513
+vectors, 0 failures).
+
+| Crate | Version |
+|---|---|
+| `dsip-broadcast` | 0.1.1 |
+| `dsip-cli` | 0.3.0 |
+| `dsip-core` | 0.2.0 |
+| `dsip-dht` | 0.2.0 |
+| `dsip-endpoint` | 0.4.0 |
+| `dsip-events` | 0.2.0 |
+| `dsip-gateway` | 0.1.0 |
+| `dsip-kt` | 0.1.0 |
+| `dsip-mailbox` | 0.4.0 |
+| `dsip-media` | 0.1.1 |
+| `dsip-messaging` | 0.4.0 |
+| `dsip-messaging-device` | 0.4.0 |
+| `dsip-messenger` | 0.4.0 |
+| `dsip-mls` | 0.1.0 |
+| `dsip-node` | 0.1.1 |
+| `dsip-number` | 0.1.0 |
+| `dsip-phone` | 0.5.0 |
+| `dsip-push` | 0.1.1 |
+| `dsip-recording` | 0.1.0 |
+| `dsip-relay` | 0.3.1 |
+| `dsip-schema` | 0.2.0 |
+| `dsip-session` | 0.2.0 |
+| `dsip-testkit` | 0.3.0 |
+| `dsip-transport` | 0.8.0 (was 0.7.0) |
+| `dsip-wake` | 0.2.0 |
+| `dsip-wasm` | 0.1.0 |
+| `dsip-webrtc-binding` | 0.1.0 |
+
+No breaking changes. The services are unchanged in behaviour and rebuilt.
+
+### Added
+- `Identity::did_web_document(relay, mailbox, also_known_as)` (#45): the DID document a `did:web` identity serves. It
+  holds the identity key as `#key-1`, its key agreement key under `keyAgreement` (the delegated one when it holds one,
+  §7.3), and `DSIPSignaling` and `DSIPMailbox` services. A `did:web` is reached by its document alone (§8.1).
+
+### Changed
+- `Identity::rehome_did_web` writes `did.json` with `keyAgreement`, after re-issuing the key agreement delegation for
+  the new subject.
+
 ## [2026-11-08] — workspace release
 
 Key agreement delegation (DSIP spec-gap 179), the push gateway's APNs message topic (spec-gap 178), and identity key
