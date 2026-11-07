@@ -7,6 +7,57 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+## [2026-11-10] — workspace release
+
+Devices without the identity key (app plan A6, decision 5 (a)). DSIP spec: `poc-v1.0.5`, unchanged (2,513 vectors, 0
+failures).
+
+| Crate | Version |
+|---|---|
+| `dsip-broadcast` | 0.1.1 |
+| `dsip-cli` | 0.3.0 |
+| `dsip-core` | 0.2.0 |
+| `dsip-dht` | 0.2.0 |
+| `dsip-endpoint` | 0.4.0 |
+| `dsip-events` | 0.2.0 |
+| `dsip-gateway` | 0.1.0 |
+| `dsip-kt` | 0.1.0 |
+| `dsip-mailbox` | 0.4.0 |
+| `dsip-media` | 0.1.1 |
+| `dsip-messaging` | 0.4.0 |
+| `dsip-messaging-device` | 0.4.0 |
+| `dsip-messenger` | 0.5.0 (was 0.4.0) |
+| `dsip-mls` | 0.1.0 |
+| `dsip-node` | 0.1.1 |
+| `dsip-number` | 0.1.0 |
+| `dsip-phone` | 0.5.0 |
+| `dsip-push` | 0.1.1 |
+| `dsip-recording` | 0.1.0 |
+| `dsip-relay` | 0.3.1 |
+| `dsip-schema` | 0.2.0 |
+| `dsip-session` | 0.2.0 |
+| `dsip-testkit` | 0.3.0 |
+| `dsip-transport` | 0.9.0 (was 0.8.0) |
+| `dsip-wake` | 0.2.0 |
+| `dsip-wasm` | 0.1.0 |
+| `dsip-webrtc-binding` | 0.1.0 |
+
+**Breaking changes** (#47):
+- `dsip_transport::identity::Identity.controller` is `Option<KeyPair>`: use `identity_key()`, which returns
+  `Error::NoIdentityKey` on a device that joined without it.
+- `did_web_document` and `derived_key_agreement_secret` return `Result`; `key_agreement_secret` returns an `Option`.
+- `dsip_messenger::engine_identity_with` takes the identity key as `Option<&KeyPair>`.
+
+The services are unchanged in behaviour and rebuilt.
+
+### Added
+- `Identity::delegate_device(device, now)`: the identity's delegation of another device (§7.4), with this device's own
+  capabilities.
+- `Identity::join(dir, identity, name, device, delegation, key_agreement)`: a device that joins without the identity
+  key. It holds its own key, the identity's delegation of it and the identity's key agreement key (§7.3), so it opens
+  what is sealed to the identity and signs nothing as it.
+- `Identity::load` reads an identity folder without `controller.key`.
+
 ## [2026-11-09] — workspace release
 
 The `did:web` document for an identity on its own domain (app plan A6d). DSIP spec: `poc-v1.0.5`, unchanged (2,513
