@@ -64,6 +64,10 @@ pub enum Error {
         /// The document's `id`.
         got: String,
     },
+    /// The identity key is not on this device (a device that joined holds only its own key, its delegation and the
+    /// key agreement key, §7.3): what needs it is done on a device that holds it.
+    #[error("this device does not hold the identity key")]
+    NoIdentityKey,
     /// A key file that is not 32 bytes of hex.
     #[error("{0}: expected 64 hex characters")]
     BadKey(PathBuf),

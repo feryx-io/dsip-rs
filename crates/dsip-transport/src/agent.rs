@@ -132,8 +132,13 @@ pub const PEER_BIND_S: u64 = 8;
 pub const ROUTE_GRACE_S: i64 = 60;
 
 /// The wire tag of the audience `id`'s identity labels `label` (P§12.1): the label stays on the subject's devices.
+/// Every device of an identity holds a key agreement secret (the identity key's, or the delegated one a device that
+/// joined holds); one with neither has none to tag with, and the label goes in clear.
 pub fn audience_tag(id: &Identity, label: &str) -> String {
-    dsip_core::presence_seal::audience_tag(&id.key_agreement_secret(), &id.meta.identity, label)
+    match id.key_agreement_secret() {
+        Some(s) => dsip_core::presence_seal::audience_tag(&s, &id.meta.identity, label),
+        None => label.to_string(),
+    }
 }
 
 type Resolution = (String, std::result::Result<dsip_core::did::DidDocument, dsip_core::did::ResolveError>);

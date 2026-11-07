@@ -38,7 +38,7 @@ async fn bound(tag: &str, gw: &PushGateway) -> (Messenger<MemoryStore>, String, 
     tokio::spawn(async move { server.serve_tls(tcp, tls).await });
 
     let id = Identity::init(&dir.join("bob"), "Bob", None, None).unwrap();
-    let engine_identity = dsip_messenger::engine_identity(&id.meta.identity, &id.device, &id.controller, &id.delegation, "Bob");
+    let engine_identity = dsip_messenger::engine_identity(&id.meta.identity, &id.device, id.identity_key().unwrap(), &id.delegation, "Bob");
     let engine = Engine::open(&engine_identity, &did, &uri, MemoryStore::default(), &Value::Null, now_s() as f64).unwrap();
     let cfg = Config { identity: id.meta.identity.clone(), device: id.device.clone(), delegation: id.delegation.clone(), mailbox: (did.clone(), uri),
                        resolver_files: vec![], ca: Some(cert), media_dir: dir.join("media"), host_key: "test".into() };

@@ -49,7 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let identity = id.meta.identity.clone();
     if mode == "doc" {
         let (Some(mailbox), Some(uri)) = (args.get(2), args.get(3)) else { return Err(usage.into()) };
-        println!("{}", serde_json::to_string_pretty(&dsip_messenger::did_document(&identity, &id.controller, mailbox, uri))?);
+        println!("{}", serde_json::to_string_pretty(&dsip_messenger::did_document(&identity, id.identity_key()?, mailbox, uri))?);
         return Ok(());
     }
     let ca = args.get(2).ok_or(usage)?;
@@ -60,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mailbox = dsip_messenger::mailbox_of(&identity, &dsip_messenger::resolver(&resolver_files))?;
 
     let now = dsip_transport::now_s() as f64;
-    let engine_identity = dsip_messenger::engine_identity(&identity, &id.device, &id.controller, &id.delegation, &id.meta.display_name);
+    let engine_identity = dsip_messenger::engine_identity(&identity, &id.device, id.identity_key()?, &id.delegation, &id.meta.display_name);
     let engine = Engine::open(&engine_identity, &mailbox.0, &mailbox.1, MemoryStore::default(), &Value::Null, now)?;
     let cfg = Config { identity: identity.clone(), device: id.device.clone(), delegation: id.delegation.clone(), mailbox,
                        resolver_files, ca: Some(ca.into()), media_dir: std::env::temp_dir().join("echo-bot"), host_key: "echo-bot".into() };
