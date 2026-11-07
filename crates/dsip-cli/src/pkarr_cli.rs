@@ -151,7 +151,7 @@ impl Pkarr {
     /// Spec: DHT Hints Profile §9 (publishing).
     pub async fn publish(&self, id: &Identity, relay_uri: &str, ttl: u32) -> Result<()> {
         let ep = PublishEndpoint { uri: relay_uri.to_string(), bindings: vec!["ws/1.0".into()], service: None };
-        let key = &id.controller;
+        let key = id.identity_key()?;
         let (ts, stored) = self.publish_zone(key, |ts, foreign| pkarr::build_payload(key, std::slice::from_ref(&ep), ttl, ts, foreign)).await?;
         println!("hint       pkarr published {relay_uri}  seq {ts}  ttl {ttl} s  to {}   §8.5 signed by the identity key",
                  stored.join(", "));
@@ -180,7 +180,7 @@ impl Pkarr {
     ///
     /// Spec: DHT Hints Profile §9.1 (pointer).
     pub async fn publish_pointer(&self, id: &Identity, devices: &[String], ttl: u32) -> Result<()> {
-        let key = &id.controller;
+        let key = id.identity_key()?;
         let (ts, stored) = self.publish_zone(key, |ts, foreign| pkarr::build_pointer_payload(key, devices, ttl, ts, foreign)).await?;
         println!("pointer    pkarr published {} device(s)  seq {ts}  ttl {ttl} s  to {}   §9.1 signed by the identity key",
                  devices.len(), stored.join(", "));

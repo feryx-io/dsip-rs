@@ -30,8 +30,9 @@ pub struct IdentityMeta {
 pub struct Identity {
     /// Directory.
     pub dir: PathBuf,
-    /// Controller key (`did:key`).
-    pub controller: KeyPair,
+    /// The identity key (`did:key`), when this device holds it: the first device does; a device that joined holds only
+    /// its own key, its delegation and the key agreement key (§7.3, decision 5 (a) of the app plan).
+    pub controller: Option<KeyPair>,
     /// Device key (`did:key`).
     pub device: KeyPair,
     /// Delegation controller→device (signed by the controller).
@@ -115,7 +116,7 @@ impl Identity {
         file(dir, std::fs::create_dir_all(dir))?;
         let (controller, device) = match (fixture, controller_from) {
             // A second device of an existing identity: reuse its controller, mint a new device key.
-            (_, Some(src)) => (Identity::load(src)?.controller, KeyPair::generate()),
+            (_, Some(src)) => (Identity::load(src)?.identity_key()?.clone(), KeyPair::generate()),
             (Some(f), None) => (KeyPair::from_fixture_name(f), KeyPair::from_fixture_name(&format!("{f}-phone"))),
             (None, None) => (KeyPair::generate(), KeyPair::generate()),
         };
@@ -137,7 +138,74 @@ impl Identity {
         write_key(&dir.join("device.key"), &device)?;
         write(&dir.join("delegation.json"), delegation.frame())?;
         write(&dir.join("identity.json"), serde_json::to_string_pretty(&meta)?)?;
-        Ok(Identity { dir: dir.to_path_buf(), controller, device, delegation, meta, key_agreement: None })
+        Ok(Identity { dir: dir.to_path_buf(), controller: Some(controller), device, delegation, meta, key_agreement: None })
+    }
+
+    /// The identity key, or [`Error::NoIdentityKey`] on a device that joined without it.
+    pub fn identity_key(&self) -> Result<&KeyPair> {
+        self.controller.as_ref().ok_or(Error::NoIdentityKey)
+    }
+
+    /// The identity's delegation of `device` (another device joining it, §7.4), with the capabilities this device's own
+    /// delegation grants, for a year: signed by the identity key, so only a device holding it gives one.
+    ///
+    /// Spec: §7.4.
+    pub fn delegate_device(&self, device: &str, now: i64) -> Result<Envelope> {
+        let key = self.identity_key()?;
+        let caps = self.capabilities();
+        let caps_ref: Vec<&str> = caps.iter().map(String::as_str).collect();
+        let payload = delegation_payload(&self.meta.identity, device, now - 60, now + 365 * 86_400, &caps_ref);
+        Ok(sign(&payload, key, &self.identity_kid()))
+    }
+
+    /// The capabilities this device's delegation grants (its payload is our own, already trusted).
+    fn capabilities(&self) -> Vec<String> {
+        use base64::Engine as _;
+        let payload: serde_json::Value = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(&self.delegation.payload)
+            .ok()
+            .and_then(|b: Vec<u8>| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
+        payload["capabilities"].as_array().into_iter().flatten().filter_map(|x| x.as_str().map(String::from)).collect()
+    }
+
+    /// A device joining `identity` (§7.4): its own key `device`, the identity's delegation of it, and the identity's
+    /// key agreement key, kept in `dir`. It holds no identity key: it opens what is sealed to the identity with the key
+    /// agreement key (§7.3), and signs as its device. The delegation must name `device` and be the identity's.
+    ///
+    /// Spec: §7.3, §7.4.
+    pub fn join(dir: &Path, identity: &str, display_name: &str, device: KeyPair, delegation: Envelope, key_agreement: KeyAgreement) -> Result<Identity> {
+        use base64::Engine as _;
+        let p: serde_json::Value = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(&delegation.payload)
+            .ok()
+            .and_then(|b: Vec<u8>| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
+        if p["subject"] != identity || p["device"] != device.did().as_str() {
+            return Err(Error::Envelope(Some(dsip_core::RejectCode::DelegationInvalid)));
+        }
+        file(dir, std::fs::create_dir_all(dir))?;
+        let meta = IdentityMeta { identity: identity.into(), device: device.did(), display_name: display_name.into() };
+        write_key(&dir.join("device.key"), &device)?;
+        write(&dir.join("delegation.json"), delegation.frame())?;
+        write(&dir.join("identity.json"), serde_json::to_string_pretty(&meta)?)?;
+        let mut id = Identity { dir: dir.to_path_buf(), controller: None, device, delegation, meta, key_agreement: None };
+        id.keep_key_agreement(key_agreement)?;
+        Ok(id)
+    }
+
+    /// Keep `ka` in `key-agreement.json` (its owner's alone), and hold it.
+    fn keep_key_agreement(&mut self, ka: KeyAgreement) -> Result<()> {
+        let f = KeyAgreementFile { secret: hex(&ka.secret), delegation: ka.delegation.frame() };
+        let path = self.dir.join("key-agreement.json");
+        write(&path, serde_json::to_string_pretty(&f)?)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file(&path, std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)))?;
+        }
+        self.key_agreement = Some(ka);
+        Ok(())
     }
 
     /// Re-home this identity on `did:web` `did`: its controller key becomes the document's `#key-1`, the delegation is
@@ -149,19 +217,14 @@ impl Identity {
         if !did.starts_with("did:web:") {
             return Err(Error::NotDidWeb(did.to_string()));
         }
+        let key = self.identity_key()?.clone();
         let kid = format!("{did}#key-1");
-        // Keep the capabilities the current delegation grants (its payload is our own, already trusted).
-        use base64::Engine as _;
-        let payload: serde_json::Value = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(&self.delegation.payload)
-            .ok()
-            .and_then(|b: Vec<u8>| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
-        let caps: Vec<String> = payload["capabilities"].as_array().into_iter().flatten().filter_map(|x| x.as_str().map(String::from)).collect();
+        // Keep the capabilities the current delegation grants.
+        let caps = self.capabilities();
         let now = crate::now_s();
         let caps_ref: Vec<&str> = caps.iter().map(String::as_str).collect();
         let payload = delegation_payload(did, &self.device.did(), now - 60, now + 365 * 86_400, &caps_ref);
-        self.delegation = sign(&payload, &self.controller, &kid);
+        self.delegation = sign(&payload, &key, &kid);
         self.meta.identity = did.to_string();
         write(&self.dir.join("delegation.json"), self.delegation.frame())?;
         write(&self.dir.join("identity.json"), serde_json::to_string_pretty(&self.meta)?)?;
@@ -169,7 +232,7 @@ impl Identity {
         if let Some(secret) = self.key_agreement.as_ref().map(|k| k.secret) {
             self.issue_key_agreement(secret, now)?;
         }
-        let doc = self.did_web_document(None, None, also_known_as);
+        let doc = self.did_web_document(None, None, also_known_as)?;
         write(&self.dir.join("did.json"), serde_json::to_string_pretty(&doc)?)?;
         Ok(())
     }
@@ -181,15 +244,17 @@ impl Identity {
     /// `also_known_as`.
     ///
     /// Spec: §7.2, §7.3, §8.1, §13.2, M§4.2, M§6.9.
-    pub fn did_web_document(&self, relay: Option<&str>, mailbox: Option<(&str, &str)>, also_known_as: &[String]) -> serde_json::Value {
+    /// It names the identity key, so only a device holding it makes one ([`Error::NoIdentityKey`]).
+    pub fn did_web_document(&self, relay: Option<&str>, mailbox: Option<(&str, &str)>, also_known_as: &[String]) -> Result<serde_json::Value> {
+        let identity_key = self.identity_key()?;
         let did = self.meta.identity.as_str();
         let kid = format!("{did}#key-1");
-        let x25519 = dsip_core::hpke::x25519_public(&self.key_agreement_secret());
+        let x25519 = dsip_core::hpke::x25519_public(&self.key_agreement_secret().ok_or(Error::NoIdentityKey)?);
         let mut doc = serde_json::json!({
             "@context": ["https://www.w3.org/ns/did/v1", "https://w3id.org/security/multikey/v1"],
             "id": did,
             "verificationMethod": [{"id": kid, "type": "Multikey", "controller": did,
-                                    "publicKeyMultibase": dsip_core::did::multibase_ed25519(&self.controller.public())}],
+                                    "publicKeyMultibase": dsip_core::did::multibase_ed25519(&identity_key.public())}],
             "authentication": [kid],
             "assertionMethod": [kid],
             "keyAgreement": [{"id": format!("{did}#key-agreement-1"), "type": "Multikey", "controller": did,
@@ -211,14 +276,15 @@ impl Identity {
         if !also_known_as.is_empty() {
             doc["alsoKnownAs"] = serde_json::json!(also_known_as);
         }
-        doc
+        Ok(doc)
     }
 
     /// Load an identity directory.
     pub fn load(dir: &Path) -> Result<Identity> {
         let read = |n: &str| file(dir.join(n), std::fs::read_to_string(dir.join(n)));
         let key = |n: &str| unhex(&read(n)?).ok_or_else(|| Error::BadKey(dir.join(n)));
-        let controller = KeyPair::from_seed(key("controller.key")?);
+        // a device that joined has none (§7.3)
+        let controller = if dir.join("controller.key").exists() { Some(KeyPair::from_seed(key("controller.key")?)) } else { None };
         let device = KeyPair::from_seed(key("device.key")?);
         let delegation = Envelope::from_frame(&read("delegation.json")?)?;
         let meta: IdentityMeta = serde_json::from_str(&read("identity.json")?)?;
@@ -236,10 +302,9 @@ impl Identity {
 
     /// The `kid` the identity signs its own credentials with: its did:key's, or `#key-1` of a did:web it moved to.
     fn identity_kid(&self) -> String {
-        if self.meta.identity == self.controller.did() {
-            self.controller.kid()
-        } else {
-            format!("{}#key-1", self.meta.identity)
+        match &self.controller {
+            Some(k) if self.meta.identity == k.did() => k.kid(),
+            _ => format!("{}#key-1", self.meta.identity),
         }
     }
 
@@ -250,12 +315,12 @@ impl Identity {
     ///
     /// Spec: §7.3. Impl: how an identity's devices come to hold the key agreement secret is the identity's own matter
     /// (§7.3, M§6.9); deriving it keeps a backup of the identity key enough.
-    pub fn derived_key_agreement_secret(&self, n: u32) -> [u8; 32] {
+    pub fn derived_key_agreement_secret(&self, n: u32) -> Result<[u8; 32]> {
         use hmac::Mac;
-        let mut m = <hmac::Hmac<sha2::Sha256> as Mac>::new_from_slice(&self.controller.seed()).expect("an HMAC key");
+        let mut m = <hmac::Hmac<sha2::Sha256> as Mac>::new_from_slice(&self.identity_key()?.seed()).expect("an HMAC key");
         m.update(b"dsip key agreement secret v1");
         m.update(&n.to_be_bytes());
-        m.finalize().into_bytes().into()
+        Ok(m.finalize().into_bytes().into())
     }
 
     /// Sign the identity's delegation naming the X25519 key of `secret` (a year, the longest, §7.3), and keep both in
@@ -270,36 +335,26 @@ impl Identity {
             "type": "KeyAgreementDelegation", "subject": self.meta.identity, "key": dsip_core::did::multibase_x25519(&public),
             "issued_at": issued_at, "expires_at": issued_at + KEY_AGREEMENT_LIFETIME_S,
         });
-        let delegation = sign(&payload, &self.controller, &self.identity_kid());
-        let f = KeyAgreementFile { secret: hex(&secret), delegation: delegation.frame() };
-        let path = self.dir.join("key-agreement.json");
-        write(&path, serde_json::to_string_pretty(&f)?)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            file(&path, std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)))?;
-        }
-        self.key_agreement = Some(KeyAgreement { secret, delegation });
-        Ok(())
+        let delegation = sign(&payload, self.identity_key()?, &self.identity_kid());
+        self.keep_key_agreement(KeyAgreement { secret, delegation })
     }
 
     /// The identity's X25519 key agreement secret (§7.3): its delegated key's, else the one derived from the
-    /// identity key (M§6.9).
-    pub fn key_agreement_secret(&self) -> [u8; 32] {
-        match &self.key_agreement {
-            Some(k) => k.secret,
-            None => dsip_core::hpke::x25519_from_ed25519_seed(&self.controller.seed()),
+    /// identity key (M§6.9); none on a device with neither.
+    pub fn key_agreement_secret(&self) -> Option<[u8; 32]> {
+        match (&self.key_agreement, &self.controller) {
+            (Some(k), _) => Some(k.secret),
+            (None, Some(c)) => Some(dsip_core::hpke::x25519_from_ed25519_seed(&c.seed())),
+            (None, None) => None,
         }
     }
 
     /// Every X25519 secret what is sealed to the identity may open with: the delegated key's first, then the derived
-    /// one a sender that has not seen the delegation still seals to.
+    /// one a sender that has not seen the delegation still seals to (only a device holding the identity key opens
+    /// that).
     pub fn key_agreement_secrets(&self) -> Vec<[u8; 32]> {
-        let derived = dsip_core::hpke::x25519_from_ed25519_seed(&self.controller.seed());
-        match &self.key_agreement {
-            Some(k) => vec![k.secret, derived],
-            None => vec![derived],
-        }
+        let derived = self.controller.as_ref().map(|c| dsip_core::hpke::x25519_from_ed25519_seed(&c.seed()));
+        self.key_agreement.as_ref().map(|k| k.secret).into_iter().chain(derived).collect()
     }
 }
 
@@ -312,16 +367,16 @@ mod key_agreement_tests {
         let dir = std::env::temp_dir().join(format!("dsip-identity-ka-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut id = Identity::init(&dir, "Ann", None, None).unwrap();
-        let derived = dsip_core::hpke::x25519_from_ed25519_seed(&id.controller.seed());
+        let derived = dsip_core::hpke::x25519_from_ed25519_seed(&id.identity_key().unwrap().seed());
         assert_eq!(id.key_agreement_secrets(), vec![derived], "none issued: the derived key alone");
 
         let now = crate::now_s();
-        let secret = id.derived_key_agreement_secret(0);
+        let secret = id.derived_key_agreement_secret(0).unwrap();
         assert_ne!(secret, derived, "not the did:key derivation");
-        assert_ne!(secret, id.derived_key_agreement_secret(1), "the next one differs");
+        assert_ne!(secret, id.derived_key_agreement_secret(1).unwrap(), "the next one differs");
         id.issue_key_agreement(secret, now).unwrap();
         let ka = id.key_agreement.clone().unwrap();
-        assert_eq!(id.key_agreement_secret(), ka.secret);
+        assert_eq!(id.key_agreement_secret(), Some(ka.secret));
         assert_eq!(id.key_agreement_secrets(), vec![ka.secret, derived], "the delegated key first");
 
         // kept: loaded back as issued; the file its owner's alone
@@ -372,21 +427,61 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("dsip-identity-web-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut id = Identity::init(&dir, "Ann", None, None).unwrap();
-        let secret = id.derived_key_agreement_secret(0);
+        let secret = id.derived_key_agreement_secret(0).unwrap();
         id.issue_key_agreement(secret, crate::now_s()).unwrap();
         id.rehome_did_web("did:web:ann.example.com", &[]).unwrap();
         let ka = id.key_agreement.clone().unwrap();
         assert_eq!(ka.secret, secret, "the same key, re-issued for the new subject");
-        let doc = id.did_web_document(Some("wss://relay.example.com/dsip"), Some(("did:web:mbx.example.com", "wss://mbx.example.com/dsip")), &[]);
+        let doc = id.did_web_document(Some("wss://relay.example.com/dsip"), Some(("did:web:mbx.example.com", "wss://mbx.example.com/dsip")), &[]).unwrap();
         let parsed: dsip_core::did::DidDocument = serde_json::from_value(doc).unwrap();
         assert_eq!(parsed.id, "did:web:ann.example.com");
         assert_eq!(parsed.signaling_uri().as_deref(), Some("wss://relay.example.com/dsip"));
         assert_eq!(parsed.x25519_key_agreement(), Some(ka.public()), "the delegated key, not the derived one");
-        assert_eq!(parsed.ed25519_key("did:web:ann.example.com#key-1", "key-1"), Some(id.controller.public()));
+        assert_eq!(parsed.ed25519_key("did:web:ann.example.com#key-1", "key-1"), Some(id.identity_key().unwrap().public()));
         assert!(parsed.service.iter().any(|s| s.service_type == "DSIPMailbox"));
         // rehome wrote one too, with the key agreement key and no services
         let written: dsip_core::did::DidDocument = serde_json::from_str(&std::fs::read_to_string(dir.join("did.json")).unwrap()).unwrap();
         assert_eq!(written.x25519_key_agreement(), Some(ka.public()));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_device_joins_without_the_identity_key_and_opens_with_the_key_agreement_key() {
+        let base = std::env::temp_dir().join(format!("dsip-identity-join-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let mut first = Identity::init(&base.join("first"), "Ann", None, None).unwrap();
+        let now = crate::now_s();
+        first.issue_key_agreement(first.derived_key_agreement_secret(0).unwrap(), now).unwrap();
+
+        // the new device makes its key; the first delegates it and hands over the key agreement key
+        let device = KeyPair::generate();
+        let delegation = first.delegate_device(&device.did(), now).unwrap();
+        let ka = first.key_agreement.clone().unwrap();
+        let joined = Identity::join(&base.join("second"), &first.meta.identity, "Ann", device.clone(), delegation.clone(), ka.clone()).unwrap();
+        assert!(!base.join("second").join("controller.key").exists(), "no identity key on the new device");
+
+        // loaded back: no identity key, the delegated key agreement key only
+        let id = Identity::load(&base.join("second")).unwrap();
+        assert!(id.controller.is_none());
+        assert_eq!((id.meta.identity.as_str(), id.device.did()), (first.meta.identity.as_str(), device.did()));
+        assert_eq!(id.key_agreement_secret(), Some(ka.secret));
+        assert_eq!(id.key_agreement_secrets(), vec![ka.secret], "it opens only what is sealed to the delegated key");
+        assert_eq!(joined.delegation.frame(), delegation.frame());
+        // the delegation verifies as the identity's of this device (§7.4), with the first's capabilities
+        let resolver = dsip_core::did::StaticResolver::default();
+        let ctx = dsip_core::envelope::Context::new(now, &resolver);
+        let ver = dsip_core::envelope::verify_raw(&delegation, &ctx, false).unwrap();
+        assert_eq!((ver.signer_did.as_str(), ver.payload["device"].as_str()), (first.meta.identity.as_str(), Some(device.did().as_str())));
+        assert_eq!(ver.payload["capabilities"], serde_json::json!(["dsip.signaling", "dsip.media.interactive", "dsip.messaging"]));
+
+        // what needs the identity key, it cannot do
+        assert!(matches!(id.delegate_device("did:key:z6MkOther", now), Err(Error::NoIdentityKey)));
+        assert!(matches!(id.derived_key_agreement_secret(0), Err(Error::NoIdentityKey)));
+        let mut id = id;
+        assert!(matches!(id.rehome_did_web("did:web:ann.example.com", &[]), Err(Error::NoIdentityKey)));
+        // a delegation of another device is refused
+        let other = first.delegate_device(&KeyPair::generate().did(), now).unwrap();
+        assert!(Identity::join(&base.join("third"), &first.meta.identity, "Ann", KeyPair::generate(), other, ka).is_err());
+        std::fs::remove_dir_all(base).unwrap();
     }
 }

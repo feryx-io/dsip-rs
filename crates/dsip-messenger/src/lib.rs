@@ -287,22 +287,26 @@ pub fn did_document(identity: &str, controller: &KeyPair, mailbox_did: &str, mai
 /// The identity JSON [`Engine::open`] takes: the identity, its device and controller seeds, the delegation to the
 /// device and a display name.
 pub fn engine_identity(identity: &str, device: &KeyPair, controller: &KeyPair, delegation: &Envelope, display_name: &str) -> String {
-    engine_identity_with(identity, device, controller, delegation, display_name, None)
+    engine_identity_with(identity, device, Some(controller), delegation, display_name, None)
 }
 
 /// As [`engine_identity`], with the X25519 secret of a key agreement key the identity delegated (core §7.3,
-/// spec-gap 179): sealed introductions open with it first.
+/// spec-gap 179): sealed introductions open with it first. A device that joined without the identity key passes no
+/// `controller`, and opens with the key agreement key alone.
 pub fn engine_identity_with(
     identity: &str,
     device: &KeyPair,
-    controller: &KeyPair,
+    controller: Option<&KeyPair>,
     delegation: &Envelope,
     display_name: &str,
     key_agreement: Option<&[u8; 32]>,
 ) -> String {
     let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
     let mut v = json!({"identity": identity, "device_seed_hex": hex(&device.seed()), "delegation": delegation.frame(),
-           "controller_seed_hex": hex(&controller.seed()), "display_name": display_name});
+           "display_name": display_name});
+    if let Some(c) = controller {
+        v["controller_seed_hex"] = json!(hex(&c.seed()));
+    }
     if let Some(sk) = key_agreement {
         v["key_agreement_secret_hex"] = json!(hex(sk));
     }

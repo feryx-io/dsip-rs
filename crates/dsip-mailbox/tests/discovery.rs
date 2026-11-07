@@ -120,7 +120,7 @@ async fn device(dir: &std::path::Path, name: &str, mailbox: (String, String), hi
     let id = Identity::init(&dir.join(name), name, None, None).unwrap();
     let identity = id.meta.identity.clone();
     let now = now_s();
-    let engine_identity = dsip_messenger::engine_identity(&identity, &id.device, &id.controller, &id.delegation, name);
+    let engine_identity = dsip_messenger::engine_identity(&identity, &id.device, id.identity_key().unwrap(), &id.delegation, name);
     let engine = Engine::open(&engine_identity, &mailbox.0, &mailbox.1, MemoryStore::default(), &Value::Null, now as f64).unwrap();
     let cfg = Config { identity: identity.clone(), device: id.device.clone(), delegation: id.delegation.clone(), mailbox: mailbox.clone(),
                        resolver_files: vec![], ca: Some(dir.join("cert.pem")), media_dir: dir.join(name).join("media"), host_key: "test".into() };
