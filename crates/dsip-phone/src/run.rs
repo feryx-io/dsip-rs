@@ -63,12 +63,12 @@ struct Batch {
 
 impl Runner {
     pub(crate) fn new(agent: Agent, cmds: mpsc::UnboundedReceiver<Cmd>, line: Line, incoming: mpsc::UnboundedSender<IncomingCall>,
-                      issued: mpsc::UnboundedSender<IssuedGrant>, presence: watch::Sender<std::collections::BTreeMap<String, crate::Presence>>, media: Media) -> Runner {
+                      issued: mpsc::UnboundedSender<IssuedGrant>, presence: watch::Sender<std::collections::BTreeMap<String, crate::Presence>>, (media, turn): (Media, Option<dsip_transport::turn::TurnClient>)) -> Runner {
         #[cfg(not(feature = "media"))]
-        let _ = media;
+        let _ = (media, turn);
         Runner {
             #[cfg(feature = "media")]
-            legs: legs::Legs::new(media, line.wake.clone()),
+            legs: legs::Legs::new(media, turn, line.wake.clone()),
             agent,
             cmds,
             line,
@@ -344,18 +344,39 @@ mod legs {
     use tokio::sync::{mpsc, Notify};
 
     use dsip_endpoint::{MediaRequest, MediaResult};
-    use dsip_media::{Candidate, MediaConfig, MediaEvent, MediaLeg, Source};
+    use dsip_media::{Candidate, MediaConfig, MediaEvent, MediaLeg, Source, TurnConfig};
     use dsip_transport::agent::Agent;
+    use dsip_transport::turn::{TurnClient, TurnCredentials};
 
     use crate::{Media, Result};
 
     struct Leg {
         leg: MediaLeg,
         screening: bool,
+        /// Whether it allocates on a TURN server.
+        turn: bool,
+    }
+
+    /// The description a leg is asked for.
+    enum Describe<'a> {
+        Offer,
+        Answer(&'a str),
+    }
+
+    async fn ask(leg: &MediaLeg, what: &Describe<'_>) -> dsip_media::Result<String> {
+        match what {
+            Describe::Offer => leg.create_offer().await,
+            Describe::Answer(offer) => leg.accept_offer(offer).await,
+        }
     }
 
     pub(super) struct Legs {
         cfg: Option<MediaConfig>,
+        turn: Option<TurnClient>,
+        /// The last credentials `turn` gave.
+        turned: Option<TurnCredentials>,
+        /// Until when (unix seconds) calls go without TURN: its server did not answer in time.
+        turn_down_until: i64,
         legs: HashMap<String, Leg>,
         tx: mpsc::UnboundedSender<(String, MediaEvent)>,
         rx: mpsc::UnboundedReceiver<(String, MediaEvent)>,
@@ -363,13 +384,23 @@ mod legs {
     }
 
     impl Legs {
-        pub(super) fn new(media: Media, wake: Arc<Notify>) -> Legs {
+        /// Seconds before TURN credentials expire that new ones are asked for: a call outlasts the ones it started with
+        /// only by the allocation the TURN server already granted.
+        const TURN_MARGIN_S: i64 = 300;
+        /// How long a leg with TURN may take to describe itself: the media stack allocates on the TURN server before
+        /// its offer or answer is ready, and an unreachable one would hold the call for its whole retransmission
+        /// schedule.
+        const TURN_WAIT: std::time::Duration = std::time::Duration::from_secs(4);
+        /// Seconds calls go without TURN after its server did not answer.
+        const TURN_DOWN_S: i64 = 300;
+
+        pub(super) fn new(media: Media, turn: Option<TurnClient>, wake: Arc<Notify>) -> Legs {
             let cfg = match media {
                 Media::Native(c) => Some(c),
                 Media::None => None,
             };
             let (tx, rx) = mpsc::unbounded_channel();
-            Legs { cfg, legs: HashMap::new(), tx, rx, wake }
+            Legs { cfg, turn, turned: None, turn_down_until: 0, legs: HashMap::new(), tx, rx, wake }
         }
 
         /// Make a leg for `session`, its events forwarded to the phone's task.
@@ -379,6 +410,8 @@ mod legs {
             if screening {
                 cfg.source = Source::None;
             }
+            cfg.turn.extend(self.turn_servers().await);
+            let turn = !cfg.turn.is_empty();
             let mut leg = MediaLeg::new(cfg).await?;
             let mut events = leg.take_events();
             let (tx, wake, sid) = (self.tx.clone(), self.wake.clone(), session.to_string());
@@ -390,10 +423,50 @@ mod legs {
                     wake.notify_one();
                 }
             });
-            if let Some(old) = self.legs.insert(session.into(), Leg { leg, screening }) {
+            if let Some(old) = self.legs.insert(session.into(), Leg { leg, screening, turn }) {
                 old.leg.close().await;
             }
             Ok(())
+        }
+
+        /// The TURN servers for a new leg: the credentials kept, or new ones once they are near expiry; none when there
+        /// is no [`TurnClient`], it fails, or the TURN server lately did not answer.
+        async fn turn_servers(&mut self) -> Vec<TurnConfig> {
+            let Some(client) = &self.turn else { return vec![] };
+            let now = dsip_transport::now_s();
+            if now < self.turn_down_until {
+                return vec![];
+            }
+            if !self.turned.as_ref().is_some_and(|c| c.fresh(now, Self::TURN_MARGIN_S)) {
+                match client.fetch(now).await {
+                    Ok(c) => self.turned = Some(c),
+                    Err(e) => tracing::warn!("no TURN for this call, direct paths only: {e}"),
+                }
+            }
+            let fresh = self.turned.as_ref().filter(|c| c.fresh(now, 0));
+            fresh.into_iter().flat_map(|c| &c.servers)
+                .map(|s| TurnConfig { uri: s.uri.clone(), username: s.username.clone(), password: s.credential.clone() })
+                .collect()
+        }
+
+        /// The offer or answer of `session`'s leg. A leg with TURN that is not ready within [`Self::TURN_WAIT`], or
+        /// fails, is made again without it, and calls go without TURN for [`Self::TURN_DOWN_S`].
+        async fn describe(&mut self, session: &str, what: Describe<'_>) -> Result<String> {
+            let Some(l) = self.legs.get(session) else { return Err(crate::Error::Missing("media leg")) };
+            let (turn, screening) = (l.turn, l.screening);
+            if !turn {
+                return Ok(ask(&l.leg, &what).await?);
+            }
+            let why = match tokio::time::timeout(Self::TURN_WAIT, ask(&l.leg, &what)).await {
+                Ok(Ok(sdp)) => return Ok(sdp),
+                Ok(Err(e)) => e.to_string(),
+                Err(_) => format!("no answer within {:?}", Self::TURN_WAIT),
+            };
+            tracing::warn!("TURN: {why}; calls go without it for {} s", Self::TURN_DOWN_S);
+            self.turn_down_until = dsip_transport::now_s() + Self::TURN_DOWN_S;
+            self.open(session, screening).await?;
+            let l = self.legs.get(session).expect("opened");
+            Ok(ask(&l.leg, &what).await?)
         }
 
         pub(super) async fn request(&mut self, agent: &mut Agent, req: MediaRequest) -> Result<()> {
@@ -408,15 +481,17 @@ mod legs {
                         l.leg.add_source(source).await?; // §14.4 step 3
                         l.screening = false;
                     }
-                    let sdp = l.leg.create_offer().await?;
+                    let sdp = self.describe(&session, Describe::Offer).await?;
                     agent.media(MediaResult::Offer { session, sdp }).await?;
                 }
                 MediaRequest::Answer { session, offer, screening } => {
                     if self.legs.get(&session).is_none_or(|l| screening && !l.screening) {
                         self.open(&session, screening).await?;
                     }
-                    let Some(l) = self.legs.get(&session) else { return Ok(()) };
-                    let sdp = l.leg.accept_offer(&offer).await?;
+                    if !self.legs.contains_key(&session) {
+                        return Ok(());
+                    }
+                    let sdp = self.describe(&session, Describe::Answer(&offer)).await?;
                     agent.media(MediaResult::Answer { session, sdp }).await?;
                 }
                 MediaRequest::ApplyAnswer { session, sdp } => {

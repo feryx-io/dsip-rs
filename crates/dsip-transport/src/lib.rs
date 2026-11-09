@@ -29,6 +29,7 @@ pub mod resolver;
 pub mod shutdown;
 pub mod status;
 pub mod tls;
+pub mod turn;
 pub mod wake;
 pub mod waker;
 /// Inbound verification (re-exported from `dsip-endpoint`, where it is shared with the WASM build).

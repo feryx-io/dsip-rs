@@ -7,6 +7,16 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+### Added
+
+- `dsip-transport`: `turn::TurnClient`, short-lived TURN credentials from a relay's `/turn` (the ones the browser
+  client already uses).
+- `dsip-phone`: `PhoneBuilder::turn`. Before a call's media starts, the phone asks for credentials, keeps them until
+  five minutes before they expire, and gives the leg the relay's TURN servers. A call whose credentials cannot be had
+  goes without TURN. So does one whose TURN server is not ready within 4 s; the leg is made again without it, and calls
+  skip TURN for 5 minutes. Calls between a phone on a mobile network and a desktop behind a home NAT rang but carried
+  no audio.
+
 ### Fixed
 
 - `dsip-transport`: `tls::client_config` falls back to webpki-roots (Mozilla's roots) where the platform's store

@@ -379,6 +379,7 @@ pub struct PhoneBuilder {
     media: Media,
     configure: Option<Configure>,
     hints: Option<dsip_transport::hints::HintsClient>,
+    turn: Option<dsip_transport::turn::TurnClient>,
     seal_presence: bool,
 }
 
@@ -432,6 +433,16 @@ impl PhoneBuilder {
     /// (§8.1, [`Phone::call_with`]).
     pub fn hints(mut self, hints: dsip_transport::hints::HintsClient) -> PhoneBuilder {
         self.hints = Some(hints);
+        self
+    }
+
+    /// Ask this for TURN credentials before a call's media starts, so the call has relay candidates when no direct path
+    /// opens (a phone on a mobile network). The credentials are kept until five minutes before they expire. A call
+    /// whose request fails, or takes longer than [`TurnClient::TIMEOUT_S`], goes without TURN. Native media only.
+    ///
+    /// [`TurnClient::TIMEOUT_S`]: dsip_transport::turn::TurnClient::TIMEOUT_S
+    pub fn turn(mut self, turn: dsip_transport::turn::TurnClient) -> PhoneBuilder {
+        self.turn = Some(turn);
         self
     }
 
@@ -491,7 +502,7 @@ impl PhoneBuilder {
         let (issued_tx, issued) = mpsc::unbounded_channel();
         let (presence_tx, presence) = watch::channel(Default::default());
         let line = Line { cmds, wake: agent.waker() };
-        let task = tokio::spawn(run::Runner::new(agent, cmds_rx, line.clone(), incoming_tx, issued_tx, presence_tx, self.media).run());
+        let task = tokio::spawn(run::Runner::new(agent, cmds_rx, line.clone(), incoming_tx, issued_tx, presence_tx, (self.media, self.turn)).run());
         Ok(Phone { line, relay_url: home, hints: self.hints, incoming: Mutex::new(incoming), issued: Mutex::new(issued), presence, identity, device,
                    relay_did, relay_wake, task: Mutex::new(Some(task)) })
     }
