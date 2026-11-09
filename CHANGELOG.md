@@ -7,6 +7,12 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+### Fixed
+
+- `dsip-transport`: `tls::client_config` falls back to webpki-roots (Mozilla's roots) where the platform's store
+  cannot be read, and always returns a config. On Android every `wss` connection (relay, mailbox, a peer's relay)
+  failed with "no native root CA certificates found".
+
 ## [2026-11-10] — workspace release
 
 Devices without the identity key (app plan A6, decision 5 (a)). DSIP spec: `poc-v1.0.5`, unchanged (2,513 vectors, 0

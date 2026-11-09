@@ -126,24 +126,44 @@ fn certified(cert_pem: &Path, key_pem: &Path) -> Result<Arc<CertifiedKey>> {
     Ok(Arc::new(ck))
 }
 
-/// Client config trusting the CA/self-signed certificate(s) in `ca_pem` beside the platform's native roots: a
+/// Client config trusting the platform's roots, and beside them the CA/self-signed certificate(s) in `ca_pem`: a
 /// service dials peers under self-signed certificates (a lab) and under public ones (a deployment) from the same
-/// configuration. `None` ⇒ the native roots alone via tokio-tungstenite's default connector.
+/// configuration. Where the platform has no root store this process can read (Android, whose store
+/// `rustls-native-certs` does not reach), the roots are webpki-roots' copy of Mozilla's. Always `Some`; the `Option`
+/// is kept for callers written when `None` meant tokio-tungstenite's default connector, which on Android fails every
+/// `wss` connection with "no native root CA certificates found".
 pub fn client_config(ca_pem: Option<&Path>) -> Result<Option<Arc<ClientConfig>>> {
     install_provider();
-    let Some(p) = ca_pem else { return Ok(None) };
-    let mut roots = RootCertStore::empty();
-    roots.add_parsable_certificates(rustls_native_certs::load_native_certs().certs);
-    for c in rustls_pemfile::certs(&mut std::io::BufReader::new(file(p, std::fs::File::open(p))?)) {
-        roots.add(file(p, c)?)?;
+    let mut roots = platform_roots(rustls_native_certs::load_native_certs().certs);
+    if let Some(p) = ca_pem {
+        for c in rustls_pemfile::certs(&mut std::io::BufReader::new(file(p, std::fs::File::open(p))?)) {
+            roots.add(file(p, c)?)?;
+        }
     }
     let cfg = ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
     Ok(Some(Arc::new(cfg)))
 }
 
+/// The roots of the platform's store, `native`; webpki-roots' when it gives none that parse.
+fn platform_roots(native: Vec<CertificateDer<'static>>) -> RootCertStore {
+    let mut roots = RootCertStore::empty();
+    roots.add_parsable_certificates(native);
+    if roots.is_empty() {
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    }
+    roots
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn with_no_platform_store_the_roots_are_mozillas() {
+        // Android: rustls-native-certs finds no store
+        assert_eq!(platform_roots(vec![]).len(), webpki_roots::TLS_SERVER_ROOTS.len());
+        assert!(client_config(None).unwrap().is_some());
+    }
 
     #[test]
     fn a_reload_serves_the_new_certificate_and_a_bad_one_keeps_the_old() {
