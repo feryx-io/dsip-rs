@@ -16,9 +16,14 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
   goes without TURN. So does one whose TURN server is not ready within 4 s; the leg is made again without it, and calls
   skip TURN for 5 minutes. Calls between a phone on a mobile network and a desktop behind a home NAT rang but carried
   no audio.
+- `dsip-messaging-device`: `Messenger::forget_message` and `Messenger::forget_thread` delete one message, or a whole
+  thread, on this device only; nothing is sent. The keys of deleted messages are saved (`forgotten` in the state), so
+  a copy from the archive or MLS is not shown again.
 
 ### Fixed
 
+- `dsip-messaging-device`: a request (`Messenger::requests`) keeps the introduction's `identity` claims. The name an
+  introduction offers was dropped, so the app showed its sender by DID alone.
 - `dsip-transport`: `tls::client_config` falls back to webpki-roots (Mozilla's roots) where the platform's store
   cannot be read, and always returns a config. On Android every `wss` connection (relay, mailbox, a peer's relay)
   failed with "no native root CA certificates found".
