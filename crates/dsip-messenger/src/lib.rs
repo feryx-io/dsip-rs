@@ -78,6 +78,28 @@ pub struct Config {
     pub host_key: String,
 }
 
+/// A blob [`Messenger::upload_blob`] put at this identity's mailbox.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UploadedBlob {
+    /// Where it is: `{blob_endpoint}/{sha256}`.
+    pub uri: String,
+    /// Hex SHA-256 of the stored bytes.
+    pub sha256: String,
+    /// Size of the stored bytes.
+    pub size: u64,
+    /// The single-use key, base64url.
+    pub key: String,
+    /// The plaintext's media type.
+    pub content_type: String,
+}
+
+impl UploadedBlob {
+    /// As a content object's builders take it ([`blob::attachment_content`], [`blob::audio_content`]).
+    pub fn uploaded(&self) -> blob::Uploaded<'_> {
+        blob::Uploaded { uri: &self.uri, sha256: &self.sha256, size: self.size, key: &self.key, content_type: &self.content_type }
+    }
+}
+
 /// Something the application hears about, in the order it happened.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -435,6 +457,33 @@ impl<S: Store> Messenger<S> {
 
     fn now() -> f64 {
         now_s() as f64
+    }
+
+    /// Seal `plain` under a fresh single-use key and upload it to this identity's mailbox, authorized by a signed
+    /// `blob-put`: what an `audio`, `image` or `file` content object then carries (`blob`, with
+    /// [`UploadedBlob::uploaded`]). Refused when the mailbox advertises a `max_blob_bytes` it exceeds.
+    ///
+    /// Spec: M§8.4 rules 1–2 (AES-256-GCM, `nonce ‖ ciphertext ‖ tag`, uploaded to the sender's own mailbox), M§5.6.
+    pub async fn upload_blob(&mut self, plain: &[u8], content_type: &str) -> Result<UploadedBlob> {
+        let caps = &self.conn.as_ref().ok_or(Error::Offline)?.relay.capabilities["mailbox"];
+        let endpoint = caps["blob_endpoint"].as_str().ok_or_else(|| Error::Blob("the mailbox advertises no blob_endpoint".into()))?.to_string();
+        let max = caps["max_blob_bytes"].as_u64();
+        let key: [u8; 32] = rand::random();
+        let nonce: [u8; 12] = rand::random();
+        let sealed = blob::seal_blob(&key, &nonce, plain);
+        if let Some(max) = max.filter(|m| sealed.bytes.len() as u64 > *m) {
+            return Err(Error::Blob(format!("{} bytes sealed, over the mailbox's {max}", sealed.bytes.len())));
+        }
+        let uri = format!("{endpoint}/{}", sealed.sha256);
+        let auth = self.m.blob_put(&sealed.sha256, sealed.bytes.len() as f64, Self::now());
+        let size = sealed.bytes.len() as u64;
+        let resp = self.http.put(&uri).header("Authorization", format!("DSIP {auth}")).body(sealed.bytes).send().await?;
+        let status = resp.status().as_u16();
+        let answer = Envelope::from_frame(&resp.text().await?).ok().and_then(|e| wire::payload_of(&e)).unwrap_or_default();
+        if !matches!(status, 200 | 201) || answer["type"] != "accepted" {
+            return Err(Error::Blob(format!("upload refused: {status} {}", answer["reason"])));
+        }
+        Ok(UploadedBlob { uri, sha256: sealed.sha256, size, key: dsip_core::b64::encode(&key), content_type: content_type.to_string() })
     }
 
     /// Hold every DID document the device resolves from, as the files say now.
@@ -862,7 +911,7 @@ impl<S: Store> Messenger<S> {
             match blob::open(object, &stored) {
                 Ok(plain) => {
                     std::fs::create_dir_all(&self.cfg.media_dir)?;
-                    let path = self.cfg.media_dir.join(format!("{}.ogg", object["id"].as_str().unwrap_or("blob")));
+                    let path = self.cfg.media_dir.join(blob::file_name(object));
                     std::fs::write(&path, &plain)?;
                     return Ok(Fetched::Played(path, dsip_mls::digest(&plain), uri.to_string()));
                 }
