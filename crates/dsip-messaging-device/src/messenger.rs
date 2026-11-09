@@ -1460,7 +1460,8 @@ impl<S: Store> Messenger<S> {
         self.convs.get(gid).map(|c| c.receipts.snapshot()["read_through"].clone()).unwrap_or_else(|| json!({}))
     }
 
-    /// Introductions delivered through the mailbox and not yet answered (M§14.1), `{id: payload}`.
+    /// Introductions delivered through the mailbox and not yet answered (M§14.1), `{id: {from, purpose, sealed,
+    /// expires_at, identity}}`; `identity` is the introduction's own (§19.4), its `display_name` a claim.
     pub fn requests(&self) -> &BTreeMap<String, Value> {
         &self.requests
     }
@@ -2976,8 +2977,12 @@ impl<S: Store> Messenger<S> {
         let why = match first_contact::received_with(item, &self.keys.identity, &ctx, now, &self.key_agreement_secrets) {
             first_contact::Received::Request(req) => {
                 let purpose = req.purpose.unwrap_or_else(|| "(sealed: this device holds no key agreement key)".to_string());
-                self.requests.insert(req.id.clone(), json!({"from": req.from, "purpose": purpose, "sealed": req.sealed,
-                    "expires_at": req.payload["expires_at"]}));
+                // with the name and devices it claims (§19.4: claims, for the user to weigh)
+                let mut kept = json!({"from": req.from, "purpose": purpose, "sealed": req.sealed, "expires_at": req.payload["expires_at"]});
+                if let Some(identity) = req.payload.get("identity") {
+                    kept["identity"] = identity.clone();
+                }
+                self.requests.insert(req.id.clone(), kept);
                 // M§6.9: a sealed purpose never travels in the clear
                 let on_wire = req.payload.get("purpose").is_some();
                 return vec![Ui::Request { id: req.id, from: req.from, purpose, sealed: req.sealed, purpose_on_wire: on_wire }.into()];
