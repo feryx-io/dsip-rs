@@ -256,6 +256,46 @@ fn first_contact_and_any_object_sent() {
     assert_eq!(ui(&ev, "sent")[0]["item"], json!(item));
 }
 
+#[test]
+fn messages_deleted_on_this_device_stay_deleted() {
+    let (alice, phone, bob, bob_phone) = (KeyPair::from_fixture_name("alice"), KeyPair::from_fixture_name("alice-phone"),
+                                          KeyPair::from_fixture_name("bob"), KeyPair::from_fixture_name("bob-phone"));
+    let mut hub = Hub::new();
+    let id = identity_json(&alice, &phone);
+    let mut m = Messenger::open(&id, &hub.did(), "wss://mbx.example/dsip", MemoryStore::default(), &Value::Null, NOW as f64).unwrap();
+    let out = m.create_direct(&bob.did(), &key_packages(&bob, &bob_phone, PLAIN), None, NOW as f64).unwrap();
+    let ev = hub.drive(&mut m, &out);
+    let gid = ui(&ev, "committed")[0]["group"].as_str().unwrap().to_string();
+    for text in ["one", "two", "three"] {
+        m.send_text(&gid, text, NOW as f64).unwrap();
+    }
+    let texts = |m: &Messenger| m.thread(&gid).iter().map(|x| x["object"]["text"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    assert_eq!(texts(&m), ["one", "two", "three"]);
+
+    let two = m.thread(&gid)[1]["object"]["id"].as_str().unwrap().to_string();
+    assert!(m.forget_message(&gid, &two));
+    assert!(!m.forget_message(&gid, &two), "already gone");
+    assert!(!m.forget_message("no-such-group", "x"));
+    assert_eq!(texts(&m), ["one", "three"]);
+
+    // kept deleted across a restart: the state says so, and the shown set it rebuilds holds the key
+    let state = m.state();
+    assert_eq!(state["forgotten"].as_array().map(Vec::len), Some(1));
+    let mut browser = Messenger::new(&id, &hub.did(), "wss://mbx.example/dsip", None, NOW as f64).unwrap();
+    let mut saved: Value = serde_json::from_str(&browser.save()).unwrap();
+    saved["state"]["forgotten"] = state["forgotten"].clone();
+    browser = Messenger::new(&id, &hub.did(), "wss://mbx.example/dsip", Some(saved.to_string()), NOW as f64).unwrap();
+    assert_eq!(browser.state()["forgotten"], state["forgotten"]);
+
+    // the whole thread; the conversation stays
+    assert_eq!(m.forget_thread(&gid), 2);
+    assert!(m.thread(&gid).is_empty());
+    assert_eq!(m.state()["forgotten"].as_array().map(Vec::len), Some(3));
+    assert!(m.conversations(NOW as f64).iter().any(|c| c.group == gid));
+    m.send_text(&gid, "four", NOW as f64).unwrap();
+    assert_eq!(texts(&m), ["four"]);
+}
+
 /// The deposit id of the frame `send`.
 fn deposit_id(send: &str) -> String {
     wire::payload_of(&Envelope::from_frame(send).unwrap()).unwrap()["id"].as_str().unwrap().to_string()

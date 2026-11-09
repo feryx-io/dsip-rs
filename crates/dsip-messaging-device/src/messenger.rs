@@ -338,6 +338,9 @@ pub struct Messenger<S: Store = MemoryStore> {
     /// Each group's roster changes by identity, oldest first: `{seq, epoch, by, added, removed, left}` (M§7.3: every
     /// roster change rendered, attributed to the committing identity).
     roster_log: BTreeMap<String, Vec<Value>>,
+    /// Object keys of the messages this device's user deleted ([`Messenger::forget_message`]): kept out of `shown`'s
+    /// rebuild, so a copy from the archive or MLS is not shown again.
+    forgotten: BTreeSet<String>,
 }
 
 impl Messenger<MemoryStore> {
@@ -411,7 +414,8 @@ impl<S: Store> Messenger<S> {
             // a key saved by the browser before the sender was in it (`conversation:id`) is made again (M§8.5)
             messages: st["messages"].as_array().cloned().unwrap_or_default().into_iter()
                 .map(|mut m| { m["key"] = json!(history::object_key(&m["object"])); m }).collect(),
-            shown: st["messages"].as_array().into_iter().flatten().map(|m| history::object_key(&m["object"])).collect(),
+            shown: st["messages"].as_array().into_iter().flatten().map(|m| history::object_key(&m["object"]))
+                .chain(st["forgotten"].as_array().into_iter().flatten().filter_map(|k| k.as_str().map(String::from))).collect(),
             grants_held: serde_json::from_value(st["grants_held"].clone()).unwrap_or_default(),
             archive_keys: st["archive_keys"].as_object().into_iter().flatten()
                 .map(|(a, v)| (a.clone(), (unb64(&v["key"]), v["created_at"].as_i64().unwrap_or(0)))).collect(),
@@ -445,6 +449,7 @@ impl<S: Store> Messenger<S> {
             recording_accepted: serde_json::from_value(st["recording_accepted"].clone()).unwrap_or_default(),
             leaving: serde_json::from_value(st["leaving"].clone()).unwrap_or_default(),
             roster_log: serde_json::from_value(st["roster_log"].clone()).unwrap_or_default(),
+            forgotten: serde_json::from_value(st["forgotten"].clone()).unwrap_or_default(),
         };
         if let Some(t) = st["hub_timeout"].as_i64() {
             m.outbox.hub_timeout = t;
@@ -495,7 +500,7 @@ impl<S: Store> Messenger<S> {
             "hub_timeout": self.outbox.hub_timeout, "successors": self.successors, "handover": self.handover, "mailbox": self.mailbox.0,
             "pending": self.pending.iter().filter_map(|(id, p)| Some((id.clone(), p.to_json()?))).collect::<serde_json::Map<_, _>>(),
             "records_held": self.records_held, "records": self.records, "recording_accepted": self.recording_accepted, "leaving": self.leaving,
-            "roster_log": self.roster_log,
+            "roster_log": self.roster_log, "forgotten": self.forgotten,
         })
     }
 
@@ -1418,6 +1423,35 @@ impl<S: Store> Messenger<S> {
         let order: Vec<String> = { let mut v: Vec<String> = groups.iter().cloned().collect(); v.sort_by_key(|g| (g == gid, self.lineage(g).len())); v };
         list.sort_by_key(|m| (order.iter().position(|g| m["group"] == g.as_str()).unwrap_or(0), m["seq"].as_i64().unwrap_or(i64::MAX), s_of(&m["key"])));
         list
+    }
+
+    /// Delete the message `content_id` from `gid`'s thread on this device. Nothing is sent: the other members, and
+    /// this identity's other devices, keep their copies. A copy arriving again (from the archive, or MLS) is not shown.
+    /// Whether there was such a message. (M§8.5 and M§12 say what a device shows; what its user removes from it is
+    /// the device's own business.)
+    pub fn forget_message(&mut self, gid: &str, content_id: &str) -> bool {
+        let groups = self.lineage(gid);
+        self.forget(|m| m["group"].as_str().is_some_and(|g| groups.contains(g)) && m["object"]["id"] == content_id) > 0
+    }
+
+    /// Delete every message of `gid`'s thread (with its predecessors') on this device, as [`Messenger::forget_message`]
+    /// does one; the conversation itself stays. How many there were.
+    pub fn forget_thread(&mut self, gid: &str) -> usize {
+        let groups = self.lineage(gid);
+        self.forget(|m| m["group"].as_str().is_some_and(|g| groups.contains(g)))
+    }
+
+    fn forget(&mut self, which: impl Fn(&Value) -> bool) -> usize {
+        let before = self.messages.len();
+        let forgotten = &mut self.forgotten;
+        self.messages.retain(|m| {
+            let gone = which(m);
+            if gone {
+                forgotten.insert(history::object_key(&m["object"]));
+            }
+            !gone
+        });
+        before - self.messages.len()
     }
 
     /// Each identity's read watermark in a conversation, `{identity: content id}` (M§10.3; a sibling's undisclosed

@@ -16,6 +16,9 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
   goes without TURN. So does one whose TURN server is not ready within 4 s; the leg is made again without it, and calls
   skip TURN for 5 minutes. Calls between a phone on a mobile network and a desktop behind a home NAT rang but carried
   no audio.
+- `dsip-messaging-device`: `Messenger::forget_message` and `Messenger::forget_thread` delete one message, or a whole
+  thread, on this device only; nothing is sent. The keys of deleted messages are saved (`forgotten` in the state), so
+  a copy from the archive or MLS is not shown again.
 
 ### Fixed
 
