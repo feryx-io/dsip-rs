@@ -1735,6 +1735,7 @@ dependencies = [
  "tracing",
  "tracing-journald",
  "tracing-subscriber",
+ "webpki-roots",
 ]
 
 [[package]]
