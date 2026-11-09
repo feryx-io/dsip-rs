@@ -19,9 +19,14 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 - `dsip-messaging-device`: `Messenger::forget_message` and `Messenger::forget_thread` delete one message, or a whole
   thread, on this device only; nothing is sent. The keys of deleted messages are saved (`forgotten` in the state), so
   a copy from the archive or MLS is not shown again.
+- `dsip-messenger`: `Messenger::upload_blob` seals a payload and uploads it to the identity's mailbox (M§8.4 rules
+  1–2, M§5.6), returning an `UploadedBlob` for the content object; `dsip-messaging-device`: `blob::attachment_content`
+  makes the `image` and `file` objects (`purpose` `attachment`, M§8.2). Hosts other than the CLI can now send files.
 
 ### Fixed
 
+- `dsip-messenger`: a fetched blob is kept under its content id and its `name`, made safe for any file system, or an
+  extension for its media type (`blob::file_name`). Every blob was written as `<id>.ogg`, an image or a file too.
 - `dsip-messaging-device`: a request (`Messenger::requests`) keeps the introduction's `identity` claims. The name an
   introduction offers was dropped, so the app showed its sender by DID alone.
 - `dsip-transport`: `tls::client_config` falls back to webpki-roots (Mozilla's roots) where the platform's store

@@ -1,7 +1,7 @@
-//! Audio and video blobs: sealed for upload, named by the content object, fetched from the manifest's sources and
-//! opened only when they are the content's bytes.
+//! Blobs (audio, images, files): sealed for upload, named by the content object, fetched from the manifest's sources
+//! and opened only when they are the content's bytes, then kept under a name of their own.
 //!
-//! Spec: M§8.2 (the `audio` content object), M§8.4 (rule 1: a fresh single-use key, AES-256-GCM, no AAD,
+//! Spec: M§8.2 (the `audio`, `image` and `file` content objects; `purpose` `attachment`), M§8.4 (rule 1: a fresh single-use key, AES-256-GCM, no AAD,
 //! `nonce ‖ ciphertext ‖ tag`; rules 6–7: sources in order, size and SHA-256 checked before decrypting; "Fetching",
 //! spec-gap 106: try again or give up).
 
@@ -49,6 +49,58 @@ pub fn audio_content(id: &str, conversation: &str, sender: &str, now: i64, purpo
         obj["session"] = json!(s);
     }
     obj
+}
+
+/// An `image` or `file` content object (`purpose` `attachment`, M§8.2) for an uploaded blob; a `file` carries its
+/// `name`, which M§8.2 requires of it.
+#[allow(clippy::too_many_arguments)]
+pub fn attachment_content(id: &str, conversation: &str, sender: &str, now: i64, kind: &str, name: Option<&str>, blob: &Uploaded,
+                          text: Option<&str>) -> Value {
+    let mut obj = json!({"object": "content", "id": id, "conversation": conversation, "sender": sender, "sent_at": now, "kind": kind,
+        "purpose": "attachment",
+        "blob": {"uri": blob.uri, "sha256": blob.sha256, "size": blob.size, "key": blob.key, "alg": "A256GCM",
+                 "content_type": blob.content_type}});
+    if let Some(n) = name {
+        obj["name"] = json!(n);
+    }
+    if let Some(t) = text {
+        obj["text"] = json!(t);
+    }
+    obj
+}
+
+/// The name a fetched blob is kept under: the content's id, then its `name` made safe for any file system (a
+/// `file`'s, M§8.2), else an extension for its media type (`.ogg` for audio, as before).
+pub fn file_name(object: &Value) -> String {
+    let id: String = object["id"].as_str().unwrap_or("blob").chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    let id = if id.is_empty() { "blob".to_string() } else { id };
+    if let Some(name) = object["name"].as_str() {
+        let safe: String = name.chars()
+            .map(|c| if c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | ' ' | '(' | ')') { c } else { '_' })
+            .collect::<String>()
+            .trim_matches(|c| c == '.' || c == ' ')
+            .chars()
+            .rev().take(120).collect::<Vec<_>>().into_iter().rev().collect();
+        if !safe.is_empty() {
+            return format!("{id}-{safe}");
+        }
+    }
+    let ct = object["blob"]["content_type"].as_str().unwrap_or("");
+    let ext = match ct.split(';').next().unwrap_or("").trim() {
+        "audio/ogg" => "ogg",
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/heic" => "heic",
+        "video/webm" => "webm",
+        "video/mp4" => "mp4",
+        "text/plain" => "txt",
+        "application/pdf" => "pdf",
+        _ if object["kind"] == "audio" => "ogg",
+        _ => "bin",
+    };
+    format!("{id}.{ext}")
 }
 
 /// Where to fetch a content's blob from, in order (rules 6–7, the pinned `blob_sources`): the item's manifest
@@ -117,4 +169,38 @@ pub struct Tried {
 /// (spec-gap 67), 4 s doubling, at most 60 s.
 pub fn retry_delay_s(attempt: i64) -> i64 {
     (4i64 << (attempt - 1).clamp(0, 4)).min(60)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn up() -> Uploaded<'static> {
+        Uploaded { uri: "https://m.example/blobs/ab", sha256: "ab", size: 44, key: "k", content_type: "application/pdf" }
+    }
+
+    #[test]
+    fn an_attachment_names_its_file_and_carries_its_key() {
+        let f = attachment_content("01J", "c", "did:key:a", 5, "file", Some("plan.pdf"), &up(), None);
+        assert_eq!((f["kind"].as_str(), f["purpose"].as_str(), f["name"].as_str()), (Some("file"), Some("attachment"), Some("plan.pdf")));
+        assert_eq!((f["blob"]["key"].as_str(), f["blob"]["alg"].as_str(), f["blob"]["size"].as_u64()), (Some("k"), Some("A256GCM"), Some(44)));
+        assert!(f.get("text").is_none());
+        let i = attachment_content("01J", "c", "did:key:a", 5, "image", None, &up(), Some("look"));
+        assert!(i.get("name").is_none());
+        assert_eq!(i["text"], "look");
+    }
+
+    #[test]
+    fn a_fetched_blob_is_kept_under_its_id_and_a_safe_name() {
+        let named = |name: &str| json!({"id": "01J00", "kind": "file", "name": name, "blob": {"content_type": "application/pdf"}});
+        assert_eq!(file_name(&named("plan.pdf")), "01J00-plan.pdf");
+        assert_eq!(file_name(&named("../../etc/passwd")), "01J00-_.._etc_passwd", "no path leaves the media folder");
+        assert_eq!(file_name(&named("C:\\x:y?.txt")), "01J00-C__x_y_.txt");
+        assert_eq!(file_name(&named("...")), "01J00.pdf", "nothing left of the name: the type's extension");
+        let typed = |kind: &str, ct: &str| json!({"id": "01J00", "kind": kind, "blob": {"content_type": ct}});
+        assert_eq!(file_name(&typed("audio", "audio/ogg; codecs=opus")), "01J00.ogg", "as before for audio");
+        assert_eq!(file_name(&typed("image", "image/jpeg")), "01J00.jpg");
+        assert_eq!(file_name(&typed("file", "application/x-unknown")), "01J00.bin");
+        assert_eq!(file_name(&json!({"id": "../x", "blob": {}})), "x.bin", "the id too is kept to letters and digits");
+    }
 }
