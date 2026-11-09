@@ -147,6 +147,70 @@ async fn two_phones_with_native_audio_hear_each_other() {
     call.hang_up();
 }
 
+/// A relay's `/turn` on a local port: what it answers, and how many times it was asked.
+async fn turn_endpoint(body: Option<&'static str>) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/turn", listener.local_addr().unwrap());
+    let asked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = asked.clone();
+    tokio::spawn(async move {
+        while let Ok((mut s, _)) = listener.accept().await {
+            let mut buf = [0u8; 2048];
+            let _ = s.read(&mut buf).await;
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let (status, body) = match body {
+                Some(b) => ("200 OK", b),
+                None => ("404 Not Found", "no turn"),
+            };
+            let reply = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            let _ = s.write_all(reply.as_bytes()).await;
+        }
+    });
+    (url, asked)
+}
+
+#[tokio::test]
+async fn calls_go_on_without_turn_when_the_relay_has_none_or_its_server_is_down() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let net = Network::new();
+    let media = || {
+        dsip_phone::Media::Native(dsip_media::MediaConfig { source: dsip_media::Source::Tone { hz: 440.0 }, ..Default::default() })
+    };
+    // Alice's relay gives credentials for a TURN server that is not there; Bob's has none (404)
+    let (alice_url, alice_asked) =
+        turn_endpoint(Some(r#"{"iceServers":[{"urls":["turn:127.0.0.1:9"],"username":"9999999999:dsip","credential":"x"}],"ttl":3600}"#)).await;
+    let (bob_url, bob_asked) = turn_endpoint(None).await;
+    let turn = |url: &str| dsip_transport::turn::TurnClient::new(url, None).unwrap();
+    let alice = Phone::builder().identity(net.identity("Alice")).dialer(net.dialer()).media(media()).turn(turn(&alice_url))
+        .build().await.unwrap();
+    let bob = Phone::builder().identity(net.identity("Bob")).dialer(net.dialer()).media(media()).answer(AnswerPolicy::Accept)
+        .turn(turn(&bob_url)).build().await.unwrap();
+
+    for n in 0..2 {
+        let started = std::time::Instant::now();
+        let mut call = alice.call(bob.identity()).await.unwrap();
+        let theirs = within("incoming call", bob.incoming()).await.unwrap().call;
+        assert!(matches!(within("answer", call.outcome()).await, Outcome::Answered { .. }));
+        // the direct path still carries the call: an unreachable TURN server, or none, takes nothing away
+        within("media both ways", async {
+            while !(call.media_received() && theirs.media_received()) {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+        call.hang_up();
+        within("the end", call.ended()).await;
+        // the first waits for the TURN server a few seconds and goes on without it; the second does not wait
+        if n == 1 {
+            assert!(started.elapsed() < Duration::from_secs(3), "the second call waited {:?}", started.elapsed());
+        }
+    }
+    use std::sync::atomic::Ordering::SeqCst;
+    assert_eq!(alice_asked.load(SeqCst), 1, "asked once: the second call skips a TURN server that did not answer");
+    assert_eq!(bob_asked.load(SeqCst), 2, "a relay with no TURN is asked again for each call");
+}
+
 #[tokio::test]
 async fn a_did_key_bound_elsewhere_is_called_through_the_relay_its_hint_names() {
     // §8.1: Bob has no document; his hint on the hints node names his relay, which is not Alice's
