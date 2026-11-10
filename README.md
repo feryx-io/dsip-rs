@@ -10,7 +10,7 @@ with the [usage guide](docs/dsip-rs-guide.md).
 
 ## How it relates to the other projects
 
-- **[DSIP](https://github.com/thevoiceguy/DSIP)** holds the specification, the JSON Schemas, the conformance vectors,
+- **[DSIP](https://github.com/feryx-io/DSIP)** holds the specification, the JSON Schemas, the conformance vectors,
   the Python reference harness and a second, TypeScript implementation. It is where the spec changes and where
   vectors are written. This repository grew there as its reference implementation (`impl/`) and keeps that history.
   DSIP is the `spec/` submodule here, pinned to a tag.
@@ -66,7 +66,7 @@ spec/                      DSIP, as a git submodule at a tag: v1.0/ (spec text, 
 ## Build and test
 
 ```bash
-git clone --recurse-submodules https://github.com/thevoiceguy/dsip-rs   # or: git submodule update --init
+git clone --recurse-submodules https://github.com/feryx-io/dsip-rs   # or: git submodule update --init
 cargo build --workspace
 cargo test --workspace
 cargo run -p dsip-cli -- vectors run         # the conformance suite: 2,475 vectors, 0 failures

@@ -2,7 +2,7 @@
 # their groups' messages (Messaging Profile M§4–M§7).
 [Unit]
 Description=DSIP mailbox and hub (Messaging Profile)
-Documentation=https://github.com/thevoiceguy/dsip-rs/blob/main/docs/dsip-service-nodes-plan.md
+Documentation=https://github.com/feryx-io/dsip-rs/blob/main/docs/dsip-service-nodes-plan.md
 After=network-online.target
 Wants=network-online.target
 

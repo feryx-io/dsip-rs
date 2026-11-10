@@ -69,7 +69,7 @@ On Debian 12 or 13, or Ubuntu 22.04 or later:
 
 ```sh
 # the three services, the browser client and dsip-one-host-<release>.tar.gz (configure, the compose directory):
-# a release's files (https://github.com/thevoiceguy/dsip-rs/releases; sha256sum -c SHA256SUMS), or built with
+# a release's files (https://github.com/feryx-io/dsip-rs/releases; sha256sum -c SHA256SUMS), or built with
 #   packaging/build.sh dsip-relay dsip-mailbox dsip-web  and  crates/dsip-node/packaging/build.sh
 apt install ./dsip-relay_*_amd64.deb ./dsip-mailbox_*_amd64.deb ./dsip-node_*_amd64.deb coturn certbot
 mkdir -p /usr/local/share/dsip-web

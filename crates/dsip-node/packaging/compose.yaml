@@ -2,7 +2,7 @@
 # the Mainline DHT on 6881/udp. Its identity, peers and held records live in the `dsip-node` volume.
 services:
   dsip-node:
-    image: ghcr.io/thevoiceguy/dsip-node:latest
+    image: ghcr.io/feryx-io/dsip-node:latest
     restart: unless-stopped
     ports:
       - "8080:8080/tcp"

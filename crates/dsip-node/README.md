@@ -18,12 +18,12 @@ messages, media or presence. Design and measurements: `impl/docs/dsip-node-plan.
 |---|---|
 | **Debian / Ubuntu** | `apt install ./dsip-node_<version>_<arch>.deb`. This installs `/usr/bin/dsip-node`, `/etc/dsip-node/config.toml` (a conffile, kept on upgrade) and `dsip-node.service`, enabled and started. |
 | **Any Linux** | Unpack `dsip-node-<version>-linux-<arch>.tar.gz` (a static binary, no dependencies). Install `dsip-node.service` and `config.example.toml` from the tarball by hand. |
-| **Container** | `docker run -d -p 8080:8080 -p 4610:4610 -p 6881:6881/udp -v dsip-node:/var/lib/dsip-node ghcr.io/thevoiceguy/dsip-node`, or `compose.yaml`. |
+| **Container** | `docker run -d -p 8080:8080 -p 4610:4610 -p 6881:6881/udp -v dsip-node:/var/lib/dsip-node ghcr.io/feryx-io/dsip-node`, or `compose.yaml`. |
 
 The package starts at once with its default config. To start with your own instead (another HTTP port, bootstrap
 nodes), put `/etc/dsip-node/config.toml` in place first and install with `-o Dpkg::Options::=--force-confold`.
 
-The packages and the image (`ghcr.io/thevoiceguy/dsip-node:<release>`, e.g. `2026.11.02`, signed) come with each
+The packages and the image (`ghcr.io/feryx-io/dsip-node:<release>`, e.g. `2026.11.02`, signed) come with each
 dsip-rs workspace release, verified by its `SHA256SUMS` (RELEASING.md). To build everything yourself, run `packaging/build.sh --image`; to test it as an
 operator would, run `packaging/test.sh`.
 

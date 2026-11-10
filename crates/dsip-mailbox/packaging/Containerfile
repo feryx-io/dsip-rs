@@ -5,7 +5,7 @@ FROM gcr.io/distroless/static-debian12:nonroot
 ARG TARGETARCH
 LABEL org.opencontainers.image.title="dsip-mailbox" \
       org.opencontainers.image.description="DSIP mailbox and hub (Messaging Profile): items, KeyPackages, blobs, group fan-out" \
-      org.opencontainers.image.source="https://github.com/thevoiceguy/dsip-rs" \
+      org.opencontainers.image.source="https://github.com/feryx-io/dsip-rs" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 COPY --chmod=0755 dist/${TARGETARCH}/dsip-mailbox /usr/bin/dsip-mailbox
 COPY packaging/container.toml /etc/dsip-mailbox/mailbox.toml

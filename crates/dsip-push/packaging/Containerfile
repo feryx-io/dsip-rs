@@ -5,7 +5,7 @@ FROM gcr.io/distroless/static-debian12:nonroot
 ARG TARGETARCH
 LABEL org.opencontainers.image.title="dsip-push" \
       org.opencontainers.image.description="DSIP push gateway (Wake Profile, draft): waking sleeping devices through APNs and FCM" \
-      org.opencontainers.image.source="https://github.com/thevoiceguy/dsip-rs" \
+      org.opencontainers.image.source="https://github.com/feryx-io/dsip-rs" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 COPY --chmod=0755 dist/${TARGETARCH}/dsip-push /usr/bin/dsip-push
 COPY packaging/container.toml /etc/dsip-push/push.toml

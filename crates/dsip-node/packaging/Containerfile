@@ -7,7 +7,7 @@ FROM gcr.io/distroless/static-debian12:nonroot
 ARG TARGETARCH
 LABEL org.opencontainers.image.title="dsip-node" \
       org.opencontainers.image.description="DSIP hints node: overlay member, Mainline DHT participant, HTTP hints API" \
-      org.opencontainers.image.source="https://github.com/thevoiceguy/DSIP" \
+      org.opencontainers.image.source="https://github.com/feryx-io/DSIP" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 COPY --chmod=0755 dist/${TARGETARCH}/dsip-node /usr/bin/dsip-node
 COPY packaging/container.toml /etc/dsip-node/config.toml

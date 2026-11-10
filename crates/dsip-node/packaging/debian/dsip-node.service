@@ -2,7 +2,7 @@
 # A hints tier only: never authoritative (DSIP core §8.1); it verifies before storing or serving.
 [Unit]
 Description=DSIP hints node (overlay, Mainline DHT, HTTP hints API)
-Documentation=https://github.com/thevoiceguy/DSIP/blob/main/impl/docs/dsip-node-plan.md
+Documentation=https://github.com/feryx-io/DSIP/blob/main/impl/docs/dsip-node-plan.md
 After=network-online.target
 Wants=network-online.target
 

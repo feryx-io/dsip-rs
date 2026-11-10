@@ -81,7 +81,7 @@ stage that changes behaviour a vector can see starts with the vector in DSIP (CL
 - **S8, releases.** *Done: `.github/workflows/release.yml` on a `vYYYY.MM.DD` tag (a dry run on a pull request that
   changes it, or by hand), `packaging/release-assets.sh` (the files, one `SHA256SUMS`, the notes); images signed with
   cosign (keyless) and every file and image attested; `dsip-node-release.yml` removed.* The CalVer workspace release builds and attaches every service's artifacts: tarballs, `.deb`s,
-  `SHA256SUMS` and images pushed to `ghcr.io/thevoiceguy/dsip-relay`, `-mailbox` and `-node`. That replaces
+  `SHA256SUMS` and images pushed to `ghcr.io/feryx-io/dsip-relay`, `-mailbox` and `-node`. That replaces
   dsip-node's own `dsip-node-v*` tags. The images are signed.
 
 S1 and S2 come first: everything later assumes a config file, and an operator with `did:web` users needs S2 before
@@ -102,7 +102,7 @@ anything else.
    `offline_retention_s`, and losing the queue on a restart breaks that for every queued envelope. *Draft: (a).*
 4. **Release tags.** (a) The CalVer workspace release carries every service's artifacts (S8). (b) Per-service tags,
    as dsip-node does now. *Draft: (a),* so one name pins a server set that was tested together.
-5. **Container registry.** `ghcr.io/thevoiceguy/…`, which dsip-node's README already names. *Draft: yes.*
+5. **Container registry.** `ghcr.io/feryx-io/…`, which dsip-node's README already names. *Draft: yes.*
 6. **The relay's port on one host** (S7). (a) 443, the relay terminating TLS itself: the client's address has no port.
    The unit gains `CAP_NET_BIND_SERVICE` and loses its private user namespace (exposure 1.1 → 1.5); in compose,
    Docker publishes 8443 as 443. (b) 8443 behind a proxy on 443. *Chosen in S7: (a).* A proxy adds a service to
