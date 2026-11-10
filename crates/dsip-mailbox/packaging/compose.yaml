@@ -2,7 +2,7 @@
 # key, mailbox.sqlite and certificate live in the `dsip-mailbox` volume.
 services:
   dsip-mailbox:
-    image: ghcr.io/thevoiceguy/dsip-mailbox:latest
+    image: ghcr.io/feryx-io/dsip-mailbox:latest
     restart: unless-stopped
     ports:
       - "9443:9443/tcp"

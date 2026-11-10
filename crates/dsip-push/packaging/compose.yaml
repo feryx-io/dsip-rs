@@ -3,7 +3,7 @@
 # 443: publish 443:8445, or put it behind a proxy that passes /wake and /.well-known/did.json through.
 services:
   dsip-push:
-    image: ghcr.io/thevoiceguy/dsip-push:latest
+    image: ghcr.io/feryx-io/dsip-push:latest
     restart: unless-stopped
     ports:
       - "8445:8445/tcp"

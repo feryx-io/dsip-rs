@@ -471,7 +471,7 @@ PoC better on their own terms: each removes duplicated glue from the reference c
    tag the first CalVer release, and switch the gateway to git dependencies on it. The vectors move with the spec,
    not the stack.
 
-   *Plan (2026-10-29, decisions 6–9 below).* `thevoiceguy/dsip-rs` takes every crate, the workspace, `demos/` and
+   *Plan (2026-10-29, decisions 6–9 below).* `feryx-io/dsip-rs` takes every crate, the workspace, `demos/` and
    `web/`, with their history. DSIP keeps the spec, the schemas, the vectors, `tools/` (the Python harness, parity,
    fuzzing, spec_lint, the WAN testbed) and `impl-ts`. In parts:
    - **5a, the spec found from either layout (DSIP).** The schema build scripts find the DSIP root (`DSIP_SPEC`, or

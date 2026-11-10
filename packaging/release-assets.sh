@@ -17,7 +17,7 @@ case ${1:-} in
   *) echo "usage: $0 <vYYYY.MM.DD[.n]> | --dry-run" >&2; exit 2 ;;
 esac
 VERSION=${TAG#v}   # the images' tag
-OWNER=${GITHUB_REPOSITORY_OWNER:-thevoiceguy}; OWNER=${OWNER,,}
+OWNER=${GITHUB_REPOSITORY_OWNER:-feryx-io}; OWNER=${OWNER,,}
 OUT=dist/release; rm -rf "$OUT"; mkdir -p "$OUT"
 die() { echo "release-assets: $*" >&2; exit 1; }
 

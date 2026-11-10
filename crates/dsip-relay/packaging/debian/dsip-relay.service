@@ -2,7 +2,7 @@
 # offline recipients (§13.3), and is the presence and broadcast authority (§9.3, §22).
 [Unit]
 Description=DSIP relay (device binding, routing, store-and-forward, presence)
-Documentation=https://github.com/thevoiceguy/dsip-rs/blob/main/docs/dsip-service-nodes-plan.md
+Documentation=https://github.com/feryx-io/dsip-rs/blob/main/docs/dsip-service-nodes-plan.md
 After=network-online.target
 Wants=network-online.target
 

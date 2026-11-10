@@ -70,22 +70,22 @@ only, so a bump never edits dependents' manifests.
    - attaches each service's static-binary tarballs and `.deb`s for amd64 and arm64, `dsip-web-<v>.tar.gz`,
      `dsip-one-host-<release>.tar.gz` (`configure`, the compose directory pinned to this release's images, the guide)
      and one `SHA256SUMS`, each with a build-provenance attestation;
-   - pushes `ghcr.io/thevoiceguy/dsip-relay`, `dsip-mailbox`, `dsip-push` and `dsip-node` for linux/amd64 and linux/arm64, tagged
+   - pushes `ghcr.io/feryx-io/dsip-relay`, `dsip-mailbox`, `dsip-push` and `dsip-node` for linux/amd64 and linux/arm64, tagged
      `YYYY.MM.DD` and `latest`, signs each with cosign (keyless, the workflow's identity) and attests it.
 
    A release made by hand before the tag's run keeps its notes, and the files are added to it. A pull request that
    changes the workflow or `packaging/release-assets.sh`, or a manual run (Actions → release → Run workflow), is a dry
    run: everything but publishing, the files kept as the run's artifact.
 8. The first time an image is pushed, GitHub creates its package as private: make each of them public
-   (github.com/thevoiceguy?tab=packages → the package → Package settings → Change visibility).
+   (github.com/orgs/feryx-io/packages → the package → Package settings → Change visibility).
 
 ## Verifying a release
 
 ```sh
 sha256sum -c SHA256SUMS
-gh attestation verify dsip-relay_0.2.0-1_amd64.deb --repo thevoiceguy/dsip-rs
-cosign verify ghcr.io/thevoiceguy/dsip-relay:2026.10.31 \
-  --certificate-identity-regexp '^https://github.com/thevoiceguy/dsip-rs/.github/workflows/release.yml@refs/tags/' \
+gh attestation verify dsip-relay_0.2.0-1_amd64.deb --repo feryx-io/dsip-rs
+cosign verify ghcr.io/feryx-io/dsip-relay:2026.10.31 \
+  --certificate-identity-regexp '^https://github.com/feryx-io/dsip-rs/.github/workflows/release.yml@refs/tags/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
@@ -95,7 +95,7 @@ Consumers use git dependencies pinned to a tag, and pin every `dsip-*` crate to 
 `[workspace.dependencies]`:
 
 ```toml
-dsip-session = { git = "https://github.com/thevoiceguy/dsip-rs", tag = "v2026.11.02" }
+dsip-session = { git = "https://github.com/feryx-io/dsip-rs", tag = "v2026.11.02" }
 ```
 
 Different refs of one repository are different sources to Cargo, which duplicates shared crates and produces

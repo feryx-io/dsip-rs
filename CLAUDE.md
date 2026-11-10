@@ -4,7 +4,7 @@
 
 dsip-rs is the Rust stack for DSIP. It holds the engines, the runtime, the facades (`dsip-phone`, `dsip-messenger`),
 the services (relay, mailbox, hints node, gateway), the browser client (`web/`) and the demos. It grew as the
-reference implementation in the DSIP repository (github.com/thevoiceguy/DSIP, `impl/`), and its history comes
+reference implementation in the DSIP repository (github.com/feryx-io/DSIP, `impl/`), and its history comes
 from there. Read `docs/dsip-stack-design.md` before structural changes, and `docs/dsip-rs-guide.md` for how the
 pieces are meant to be used.
 

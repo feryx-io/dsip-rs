@@ -2,7 +2,7 @@
 # ask it to wake them (W§3, W§5).
 [Unit]
 Description=DSIP push gateway (Wake Profile: waking sleeping devices through APNs and FCM)
-Documentation=https://github.com/thevoiceguy/dsip-rs/blob/main/docs/dsip-service-nodes-plan.md
+Documentation=https://github.com/feryx-io/dsip-rs/blob/main/docs/dsip-service-nodes-plan.md
 After=network-online.target
 Wants=network-online.target
 

@@ -2,7 +2,7 @@
 # queue and certificate live in the `dsip-relay` volume.
 services:
   dsip-relay:
-    image: ghcr.io/thevoiceguy/dsip-relay:latest
+    image: ghcr.io/feryx-io/dsip-relay:latest
     restart: unless-stopped
     ports:
       - "8443:8443/tcp"
