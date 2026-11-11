@@ -7,6 +7,47 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+## [2026-11-11] — workspace release
+
+Phones on mobile networks: TURN for calls' media, and a phone that survives its relay connection being closed while
+it is locked. Attachments and deleting messages on a device. The first release under the feryx-io organization: its
+images are `ghcr.io/feryx-io/dsip-relay`, `-mailbox`, `-push` and `-node` (earlier releases' images stay under
+`ghcr.io/thevoiceguy`). DSIP spec: `poc-v1.0.5`, unchanged.
+
+| Crate | Version |
+|---|---|
+| `dsip-broadcast` | 0.1.1 |
+| `dsip-cli` | 0.3.0 |
+| `dsip-core` | 0.2.0 |
+| `dsip-dht` | 0.2.0 |
+| `dsip-endpoint` | 0.4.0 |
+| `dsip-events` | 0.2.0 |
+| `dsip-gateway` | 0.1.0 |
+| `dsip-kt` | 0.1.0 |
+| `dsip-mailbox` | 0.4.0 |
+| `dsip-media` | 0.1.1 |
+| `dsip-messaging` | 0.4.0 |
+| `dsip-messaging-device` | 0.5.0 (was 0.4.0) |
+| `dsip-messenger` | 0.6.0 (was 0.5.0) |
+| `dsip-mls` | 0.1.0 |
+| `dsip-node` | 0.1.1 |
+| `dsip-number` | 0.1.0 |
+| `dsip-phone` | 0.6.0 (was 0.5.0) |
+| `dsip-push` | 0.1.1 |
+| `dsip-recording` | 0.1.0 |
+| `dsip-relay` | 0.3.1 |
+| `dsip-schema` | 0.2.0 |
+| `dsip-session` | 0.2.0 |
+| `dsip-testkit` | 0.3.0 |
+| `dsip-transport` | 0.10.0 (was 0.9.0) |
+| `dsip-wake` | 0.2.0 |
+| `dsip-wasm` | 0.1.0 |
+| `dsip-webrtc-binding` | 0.1.0 |
+
+**Breaking changes**: none. The additions are new public API (minor bumps).
+
+The services are unchanged in behaviour and rebuilt; their packages and images link to feryx-io.
+
 ### Added
 
 - `dsip-transport`: `turn::TurnClient`, short-lived TURN credentials from a relay's `/turn` (the ones the browser
