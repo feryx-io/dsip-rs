@@ -7,6 +7,13 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+### Fixed
+
+- `dsip-mailbox`: a sync's `items` envelope fits the 65,536-byte `ws/1.0` cap (M§5.4, §13.2). A page is sent as the
+  longest prefix whose frame fits, with `next` its last cursor, and the device syncs on from there. Pages were bounded
+  by count alone: a phone with 54 items waiting (44,756 bytes, about 80 KB as one frame) refused the frame, reconnected
+  and synced from the start again, every second, and showed its mailbox as not connected.
+
 ## [2026-11-11] — workspace release
 
 Phones on mobile networks: TURN for calls' media, and a phone that survives its relay connection being closed while

@@ -658,7 +658,9 @@ impl Service {
                         .filter_map(|c| c.as_str())
                         .filter_map(|c| self.owned.get(owner).and_then(|o| o.store.get(c)).map(|it| self.item_value(it, c)))
                         .collect();
-                    let env = wire::items(&self.key, &to, now, body["in_reply_to"].as_str(), list, body["next"].clone());
+                    let env = fit_items(list, body["next"].clone(), |items, next| {
+                        wire::items(&self.key, &to, now, body["in_reply_to"].as_str(), items, next)
+                    });
                     out.push(Out::Device(to, env));
                 }
                 "push" => {
@@ -832,6 +834,33 @@ impl Service {
 
 /// The kinds a mailbox sends. Spec: W§4.4, W§5.1
 const WAKE_KINDS: [&str; 1] = ["message"];
+
+/// The `items` envelope `build` makes of the longest prefix of `items` whose frame fits the `ws/1.0` cap, `next` the
+/// last cursor it carries when any are left out (`next` as the page had it otherwise). The page the mailbox machine
+/// chose bounds the count (`limit`); this bounds the bytes, which the machine does not see. A device follows `next`
+/// with another sync, as it does for a page `limit` cut short. One item always goes: `MAX_MLS_BYTES` makes any item
+/// fit. Found on a phone whose 54 items (44,756 bytes, about 80 KB as one frame) were sent as one page: it refused the
+/// frame, reconnected and synced from the start again, every second.
+///
+/// Spec: M§5.4 ("A mailbox MUST paginate so every `items` envelope fits the transport cap"), §13.2 (65,536 bytes).
+/// Impl: the prefix is found by measuring the signed frame (a binary search over the prefix's length), not estimated
+/// from the items' sizes; the mailbox machine's paging, and the vectors that test it, stay by count.
+fn fit_items(items: Vec<Value>, next: Value, build: impl Fn(Vec<Value>, Value) -> Envelope) -> Envelope {
+    let fits = |env: &Envelope| env.frame().len() <= dsip_core::WS_MAX_ENVELOPE_BYTES;
+    let whole = build(items.clone(), next.clone());
+    if items.len() <= 1 || fits(&whole) {
+        return whole;
+    }
+    let page = |k: usize| build(items[..k].to_vec(), items[k - 1]["cursor"].clone());
+    // the longest k in 1..items.len() that fits; 1 is taken even if it does not (it cannot, by MAX_MLS_BYTES)
+    let (mut lo, mut hi) = (1, items.len() - 1);
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if fits(&page(mid)) { lo = mid } else { hi = mid - 1 }
+    }
+    tracing::info!("items: {} of {} fit one frame; next {}", lo, items.len(), items[lo - 1]["cursor"]);
+    page(lo)
+}
 
 /// The `type` a frame's payload claims, before it is verified (to choose the verification path).
 fn claimed_type(frame: &str) -> Option<String> {
@@ -2519,4 +2548,55 @@ async fn peer_run(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `n` items of `bytes` each, as `items` carries them (an MLS item's sealed bytes are base64url text).
+    fn items_of(n: usize, bytes: usize) -> Vec<Value> {
+        (1..=n).map(|i| json!({"cursor": format!("c:{i:016}"), "stored_at": 1_790_000_000, "class": "application",
+                               "source": "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
+                               "group": "MDFLNzQyU0cwMEhBWlpDS0MxMzFFQzBQR1M", "seq": i, "mls": "A".repeat(bytes)}))
+            .collect()
+    }
+
+    fn build(key: &KeyPair) -> impl Fn(Vec<Value>, Value) -> Envelope + '_ {
+        move |items, next| wire::items(key, "did:key:z6MktKcVRmk9oMmrUdeCnPAXYKCyhqUMetp3H8WK7CitqnMQ", 1_790_000_000,
+                                       Some("01K742SG00NPM1814RWZ3GWQZW"), items, next)
+    }
+
+    fn page(env: &Envelope) -> Value {
+        wire::payload_of(env).expect("payload")
+    }
+
+    /// The phone's case: 54 items, about 830 bytes each, too many for one frame. Spec: M§5.4, §13.2.
+    #[test]
+    fn a_page_too_big_for_one_frame_is_cut_at_the_cap_and_says_where_to_go_on() {
+        let key = KeyPair::generate();
+        let items = items_of(54, 830);
+        assert!(build(&key)(items.clone(), Value::Null).frame().len() > dsip_core::WS_MAX_ENVELOPE_BYTES, "the whole page must not fit");
+        let env = fit_items(items.clone(), Value::Null, build(&key));
+        let p = page(&env);
+        let k = p["items"].as_array().unwrap().len();
+        assert!(env.frame().len() <= dsip_core::WS_MAX_ENVELOPE_BYTES);
+        assert!((1..54).contains(&k));
+        assert_eq!(p["items"].as_array().unwrap()[..], items[..k], "a prefix, in cursor order");
+        assert_eq!(p["next"], items[k - 1]["cursor"], "next is the last cursor sent");
+        assert!(build(&key)(items[..=k].to_vec(), Value::Null).frame().len() > dsip_core::WS_MAX_ENVELOPE_BYTES, "the longest prefix");
+        assert_eq!(p["in_reply_to"], "01K742SG00NPM1814RWZ3GWQZW");
+    }
+
+    /// A page that fits goes as the machine made it, `next` included (a page `limit` cut short).
+    #[test]
+    fn a_page_that_fits_goes_unchanged() {
+        let key = KeyPair::generate();
+        let items = items_of(3, 500);
+        let p = page(&fit_items(items.clone(), json!("c:0000000000000003"), build(&key)));
+        assert_eq!(p["items"].as_array().unwrap()[..], items[..]);
+        assert_eq!(p["next"], "c:0000000000000003");
+        let p = page(&fit_items(items.clone(), Value::Null, build(&key)));
+        assert_eq!(p["next"], Value::Null);
+    }
 }
