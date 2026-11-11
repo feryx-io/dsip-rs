@@ -91,3 +91,83 @@ async fn a_device_bound_again_replaces_its_connection() {
     let sid = bob.call(&second.identity()).await;
     assert_eq!(second.expect("ringing", ringing).await, sid);
 }
+
+/// A dialer whose first connection can be cut as a phone's is while it sleeps: writes fail, and reads never return.
+struct Cuttable {
+    dialer: std::sync::Arc<dyn dsip_transport::conn::Dialer>,
+    cut: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    dials: std::sync::atomic::AtomicU32,
+}
+
+struct Cut {
+    io: Box<dyn dsip_transport::conn::Io>,
+    cut: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
+
+impl Cut {
+    fn is_cut(&self) -> bool {
+        self.cut.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::SeqCst))
+    }
+}
+
+impl tokio::io::AsyncRead for Cut {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        if self.is_cut() {
+            return std::task::Poll::Pending;
+        }
+        std::pin::Pin::new(&mut self.io).poll_read(cx, buf)
+    }
+}
+
+impl tokio::io::AsyncWrite for Cut {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        if self.is_cut() {
+            return std::task::Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into()));
+        }
+        std::pin::Pin::new(&mut self.io).poll_write(cx, buf)
+    }
+    fn poll_flush(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        if self.is_cut() {
+            return std::task::Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into()));
+        }
+        std::pin::Pin::new(&mut self.io).poll_flush(cx)
+    }
+    fn poll_shutdown(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.io).poll_shutdown(cx)
+    }
+}
+
+impl dsip_transport::conn::Dialer for Cuttable {
+    fn dial(&self) -> dsip_transport::conn::DialFuture {
+        let first = self.dials.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+        let (dial, cut) = (self.dialer.dial(), first.then(|| self.cut.clone()));
+        Box::pin(async move { Ok(Box::new(Cut { io: dial.await?, cut }) as Box<dyn dsip_transport::conn::Io>) })
+    }
+}
+
+/// Found on a phone: locked, its connection was closed by the system, unnoticed until the next call's invite failed
+/// to send, and that failure stopped the agent. A send that fails is a connection lost (§13.2): the agent connects
+/// again and sends it there.
+#[tokio::test]
+async fn a_send_on_a_connection_that_died_unnoticed_goes_on_a_new_one() {
+    let net = Network::new();
+    let cut = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut cfg = net.config();
+    cfg.dialer = Some(std::sync::Arc::new(Cuttable { dialer: net.dialer(), cut: cut.clone(), dials: Default::default() }));
+    let mut alice = net.connect(net.identity("Alice"), cfg).await;
+    let mut bob = net.device("Bob").await;
+
+    cut.store(true, std::sync::atomic::Ordering::SeqCst);
+    let sid = alice.call(&bob.identity()).await;
+    assert_eq!(bob.expect("ringing", ringing).await, sid, "the invite went on the new connection");
+    bob.command(CallCommand::Accept { session: sid.clone() }).await;
+    alice.until(&sid, SessionState::Active).await;
+}
