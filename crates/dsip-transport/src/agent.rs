@@ -287,7 +287,7 @@ impl Agent {
     pub async fn send_payload(&mut self, payload: serde_json::Value, ttl: i64) -> Result<String> {
         let frame = self.core.sign_payload(payload, now_s(), ttl)?;
         let env = dsip_core::envelope::Envelope::from_frame(&frame)?;
-        self.conn.send(&env).await?;
+        self.send_home(&env).await?;
         Ok(frame)
     }
 
@@ -371,7 +371,7 @@ impl Agent {
     /// ([`AgentConfig::presence`]). Returns the frame. Spec: P§3, P§12.2.
     pub async fn send_presence(&mut self, payload: serde_json::Value, ttl: i64) -> Result<String> {
         let frame = self.core.sign_presence(payload, now_s(), ttl)?;
-        self.conn.send(&dsip_core::envelope::Envelope::from_frame(&frame)?).await?;
+        self.send_home(&dsip_core::envelope::Envelope::from_frame(&frame)?).await?;
         Ok(frame)
     }
 
@@ -461,7 +461,7 @@ impl Agent {
                 Ok(c.relay.did.clone())
             }
             None => {
-                self.conn.send(&env).await?;
+                self.send_home(&env).await?;
                 Ok(self.conn.relay.did.clone())
             }
         }
@@ -476,7 +476,7 @@ impl Agent {
         let env = dsip_core::envelope::Envelope::from_frame(&frame)?;
         let id = payload_of(&env).and_then(|p| p["id"].as_str().map(String::from)).unwrap_or_default();
         self.awaiting.insert(id.clone());
-        if let Err(e) = self.conn.send(&env).await {
+        if let Err(e) = self.send_home(&env).await {
             self.awaiting.remove(&id);
             return Err(e);
         }
@@ -630,10 +630,10 @@ impl Agent {
                 CoreEvent::Send { frame, msg_type, session, to } => {
                     let env = dsip_core::envelope::Envelope::from_frame(&frame)?;
                     // a session placed through another relay goes over our connection there (§8.1)
-                    let peer = self.routes.get(&session).and_then(|(u, _, _)| self.peers.get_mut(u));
-                    match peer {
-                        Some(c) => c.send(&env).await?,
-                        None => self.conn.send(&env).await?,
+                    let via = self.routes.get(&session).map(|(u, _, _)| u.clone()).filter(|u| self.peers.contains_key(u));
+                    match via {
+                        Some(url) => self.send_via(&url, &env).await,
+                        None => self.send_home(&env).await?,
                     }
                     if msg_type == "grant" {
                         let grant = format!("{}.{}.{}", env.protected, env.payload, env.signature);
@@ -738,6 +738,35 @@ impl Agent {
         futures_util::future::select_all(recvs).await.0
     }
 
+    /// Send `env` on the connection to our relay. One that fails is a connection lost, as when receiving on it: the
+    /// agent reconnects (§13.2) and sends it on the new one, rather than failing the host's whole loop. A host whose
+    /// connection the system closed while it slept (a phone, locked) found out only by sending, and stopped.
+    async fn send_home(&mut self, env: &dsip_core::envelope::Envelope) -> Result<()> {
+        for attempt in 1..=SEND_ATTEMPTS {
+            match self.conn.send(env).await {
+                Ok(()) => return Ok(()),
+                // §13.2: a connection the relay replaced is not reconnected
+                Err(e) if self.replaced || attempt == SEND_ATTEMPTS => return Err(e),
+                Err(e) => {
+                    tracing::warn!("connection error sending: {e}; reconnecting");
+                    self.reconnect().await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Send `env` on our connection to another relay, `url`. One that fails is closed, as when receiving on it: not
+    /// redialled, the message lost, and the session it was for goes on or ends by its timers.
+    async fn send_via(&mut self, url: &str, env: &dsip_core::envelope::Envelope) {
+        let Some(c) = self.peers.get_mut(url) else { return };
+        if let Err(e) = c.send(env).await {
+            tracing::info!("their relay {url}: sending failed ({e}); the connection is closed");
+            self.peers.remove(url);
+            self.routes.retain(|_, (u, _, _)| u != url);
+        }
+    }
+
     async fn reconnect(&mut self) -> Result<()> {
         // §13.2: exponential backoff with jitter, fresh hello; sessions are unaffected.
         let (mut delay, factor, max) = BACKOFF;
@@ -762,6 +791,9 @@ impl Agent {
         }
     }
 }
+
+/// How many connections a message to our relay is tried on before its failure is the host's.
+const SEND_ATTEMPTS: u32 = 3;
 
 /// The decoded payload of an envelope, unverified: only to match a reply to its request.
 fn payload_of(env: &dsip_core::envelope::Envelope) -> Option<serde_json::Value> {

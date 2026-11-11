@@ -25,6 +25,14 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ### Fixed
 
+- `dsip-transport`: a message to the agent's relay that fails to send is a connection lost, as a failure to receive
+  already was: the agent reconnects (§13.2) and sends it on the new connection, instead of returning the error from
+  whatever sent it. One to another relay that fails closes that connection, as a failure to receive on it does. A
+  phone whose connection the system closed while it was locked found out only on its next call, and the failure
+  stopped `dsip-phone`: every call after it said "the phone has closed" until the app restarted.
+- `dsip-phone`: a call's media failing (its leg, its offer or answer, its candidates) ends that call, with the error
+  on it, rather than the phone.
+
 - `dsip-messenger`: a fetched blob is kept under its content id and its `name`, made safe for any file system, or an
   extension for its media type (`blob::file_name`). Every blob was written as `<id>.ogg`, an image or a file too.
 - `dsip-messaging-device`: a request (`Messenger::requests`) keeps the introduction's `identity` claims. The name an

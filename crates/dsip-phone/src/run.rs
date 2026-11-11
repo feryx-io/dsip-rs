@@ -117,7 +117,12 @@ impl Runner {
                 }
             }
             #[cfg(feature = "media")]
-            for session in self.legs.events(&mut self.agent).await? {
+            let heard = self.legs.events(&mut self.agent).await.unwrap_or_else(|e| {
+                // a candidate that could not be handed on: the call's ICE goes with the others, or its timers end it
+                tracing::warn!("media events: {e}");
+                vec![]
+            });
+            for session in heard {
                 if let Some(t) = self.calls.get(&session) {
                     t.heard.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
@@ -145,19 +150,7 @@ impl Runner {
                     tracing::warn!("call command: {e}");
                 }
             }
-            Cmd::HangUp(session) => {
-                let s = self.agent.endpoint().session(&session).map(|s| (s.role, s.state));
-                let cmd = match s {
-                    Some((_, SessionState::Ended)) => return Ok(()),
-                    Some((_, SessionState::Active)) => CallCommand::Hangup { session },
-                    Some((Role::Responder, _)) => CallCommand::Decline { session },
-                    // placed: cancel before the answer (§12.11); a call still waiting on its offer is cancelled too
-                    _ => CallCommand::Cancel { session },
-                };
-                if let Err(e) = self.agent.call(cmd).await {
-                    tracing::warn!("hanging up: {e}");
-                }
-            }
+            Cmd::HangUp(session) => self.hang_up(session).await,
             Cmd::SetPresence(state) => self.presence.set(&mut self.agent, state).await,
             Cmd::Watch { target, via } => self.presence.watch(&mut self.agent, target, via),
             Cmd::Unwatch(target) => self.presence.unwatch(&mut self.agent, &target),
@@ -277,7 +270,21 @@ impl Runner {
                 }
                 AgentEvent::Emission(Emission::Ui(UiEvent::Ended { reason })) => b.ended.push_back(reason),
                 AgentEvent::Emission(Emission::Ui(UiEvent::Answered { answered_by })) => b.answered.push_back(answered_by),
-                AgentEvent::Media(req) => self.media(req).await?,
+                AgentEvent::Media(req) => {
+                    let session = media_session(&req);
+                    if let Err(e) = self.media(req).await {
+                        // a call's media failing ends that call, not the phone and every call after it
+                        tracing::warn!("media for {}: {e}; the call ends", session.as_deref().unwrap_or("a call"));
+                        if let Some(session) = session {
+                            if let Some(t) = self.calls.get(&session) {
+                                if let Ok(mut err) = t.error.lock() {
+                                    *err = Some(format!("media: {e}"));
+                                }
+                            }
+                            self.hang_up(session).await;
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -310,6 +317,21 @@ impl Runner {
         }
         for sid in over {
             self.calls.remove(&sid);
+        }
+    }
+
+    /// End `session` as its state allows: hang up once answered, decline as the callee, cancel as the caller.
+    async fn hang_up(&mut self, session: String) {
+        let s = self.agent.endpoint().session(&session).map(|s| (s.role, s.state));
+        let cmd = match s {
+            Some((_, SessionState::Ended)) => return,
+            Some((_, SessionState::Active)) => CallCommand::Hangup { session },
+            Some((Role::Responder, _)) => CallCommand::Decline { session },
+            // placed: cancel before the answer (§12.11); a call still waiting on its offer is cancelled too
+            _ => CallCommand::Cancel { session },
+        };
+        if let Err(e) = self.agent.call(cmd).await {
+            tracing::warn!("hanging up: {e}");
         }
     }
 
@@ -541,5 +563,19 @@ mod legs {
             }
             Ok(heard)
         }
+    }
+}
+
+/// The session a media request is for.
+fn media_session(req: &MediaRequest) -> Option<String> {
+    match req {
+        MediaRequest::Offer { session, .. }
+        | MediaRequest::Answer { session, .. }
+        | MediaRequest::ApplyAnswer { session, .. }
+        | MediaRequest::RemoteCandidates { session, .. }
+        | MediaRequest::StartSending { session }
+        | MediaRequest::HoldSending { session }
+        | MediaRequest::Close { session } => Some(session.clone()),
+        _ => None,
     }
 }
