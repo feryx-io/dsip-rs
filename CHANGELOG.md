@@ -7,6 +7,43 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+## [2026-11-11.1] — workspace release
+
+The mailbox's sync pages fit the transport's frame cap: a phone with many messages waiting no longer loops
+reconnecting. Only `dsip-mailbox` changes. DSIP spec: `poc-v1.0.5`, unchanged.
+
+| Crate | Version |
+|---|---|
+| `dsip-broadcast` | 0.1.1 |
+| `dsip-cli` | 0.3.0 |
+| `dsip-core` | 0.2.0 |
+| `dsip-dht` | 0.2.0 |
+| `dsip-endpoint` | 0.4.0 |
+| `dsip-events` | 0.2.0 |
+| `dsip-gateway` | 0.1.0 |
+| `dsip-kt` | 0.1.0 |
+| `dsip-mailbox` | 0.4.1 (was 0.4.0) |
+| `dsip-media` | 0.1.1 |
+| `dsip-messaging` | 0.4.0 |
+| `dsip-messaging-device` | 0.5.0 |
+| `dsip-messenger` | 0.6.0 |
+| `dsip-mls` | 0.1.0 |
+| `dsip-node` | 0.1.1 |
+| `dsip-number` | 0.1.0 |
+| `dsip-phone` | 0.6.0 |
+| `dsip-push` | 0.1.1 |
+| `dsip-recording` | 0.1.0 |
+| `dsip-relay` | 0.3.1 |
+| `dsip-schema` | 0.2.0 |
+| `dsip-session` | 0.2.0 |
+| `dsip-testkit` | 0.3.0 |
+| `dsip-transport` | 0.10.0 |
+| `dsip-wake` | 0.2.0 |
+| `dsip-wasm` | 0.1.0 |
+| `dsip-webrtc-binding` | 0.1.0 |
+
+**Breaking changes**: none (a patch).
+
 ### Fixed
 
 - `dsip-mailbox`: a sync's `items` envelope fits the 65,536-byte `ws/1.0` cap (M§5.4, §13.2). A page is sent as the
