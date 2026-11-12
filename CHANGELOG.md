@@ -7,6 +7,45 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+## [2026-11-11.2] — workspace release
+
+A phone whose mailbox sends a frame too large for the connection asks for fewer items instead of asking again for the
+same ones, and the vector suite now checks that a mailbox's pages fit the frame cap, against the mailbox's own paging
+(DSIP spec-gap 180). DSIP spec: `poc-v1.0.6` (was `poc-v1.0.5`).
+
+| Crate | Version |
+|---|---|
+| `dsip-broadcast` | 0.1.1 |
+| `dsip-cli` | 0.3.0 |
+| `dsip-core` | 0.2.0 |
+| `dsip-dht` | 0.2.0 |
+| `dsip-endpoint` | 0.4.0 |
+| `dsip-events` | 0.2.0 |
+| `dsip-gateway` | 0.1.0 |
+| `dsip-kt` | 0.1.0 |
+| `dsip-mailbox` | 0.4.2 (was 0.4.1) |
+| `dsip-media` | 0.1.1 |
+| `dsip-messaging` | 0.5.0 (was 0.4.0) |
+| `dsip-messaging-device` | 0.6.0 (was 0.5.0) |
+| `dsip-messenger` | 0.6.1 (was 0.6.0) |
+| `dsip-mls` | 0.1.0 |
+| `dsip-node` | 0.1.1 |
+| `dsip-number` | 0.1.0 |
+| `dsip-phone` | 0.6.0 |
+| `dsip-push` | 0.1.1 |
+| `dsip-recording` | 0.1.0 |
+| `dsip-relay` | 0.3.1 |
+| `dsip-schema` | 0.2.0 |
+| `dsip-session` | 0.2.0 |
+| `dsip-testkit` | 0.3.0 |
+| `dsip-transport` | 0.11.0 (was 0.10.0) |
+| `dsip-wake` | 0.2.0 |
+| `dsip-wasm` | 0.1.0 |
+| `dsip-webrtc-binding` | 0.1.0 |
+
+**Breaking changes**: none. `dsip-messaging`, `dsip-messaging-device` and `dsip-transport` take minor bumps for new API
+(#58).
+
 ### Added
 
 - `dsip-messaging-device`, `dsip-messenger`: a device whose mailbox sends a frame over the cap (closed with 1009) syncs
@@ -15,6 +54,11 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
   `Messenger::too_large`, `Resume::too_large`; `dsip_transport::conn::OVERSIZE_FRAME` names the error.
 - `dsip-messaging`: the `items-pages` vectors (M§5.4, spec-gap 180) run against `wire::fit_items`, the mailbox
   service's paging by bytes, moved here from `dsip-mailbox`; `resume-trace` `too_large`.
+
+### Changed
+
+- `dsip-mailbox`: pages with `dsip_messaging::wire::fit_items`, the function the vectors test; unchanged in behaviour
+  (#58).
 
 ## [2026-11-11.1] — workspace release
 
