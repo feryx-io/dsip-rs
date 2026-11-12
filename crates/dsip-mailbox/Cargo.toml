@@ -1,7 +1,7 @@
 [package]
 name = "dsip-mailbox"
 description = "DSIP Messaging Profile 1.0 over the wire: the mailbox/hub service and a device client, driving the vector-pinned state machines with real MLS"
-version = "0.4.1"
+version = "0.4.2"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
