@@ -628,7 +628,13 @@ impl<S: Store> Messenger<S> {
                     return Ok(p.clone());
                 }
                 let conn = self.conn.as_mut().ok_or(Error::Offline)?;
-                let frame = tokio::time::timeout_at(deadline, conn.recv()).await.map_err(|_| Error::NoAnswer)??.ok_or(Error::Closed)?;
+                let frame = match tokio::time::timeout_at(deadline, conn.recv()).await.map_err(|_| Error::NoAnswer)? {
+                    Err(dsip_transport::Error::PeerViolation(dsip_transport::conn::OVERSIZE_FRAME)) => {
+                        self.m.too_large(); // M§5.4 (spec-gap 180), as in `received`
+                        return Err(dsip_transport::Error::PeerViolation(dsip_transport::conn::OVERSIZE_FRAME).into());
+                    }
+                    r => r?.ok_or(Error::Closed)?,
+                };
                 self.on_frame(host, &frame).await;
             }
         }
@@ -687,6 +693,11 @@ impl<S: Store> Messenger<S> {
                 self.lost_connection();
             }
             Err(e) => {
+                if matches!(e, Error::Transport(dsip_transport::Error::PeerViolation(dsip_transport::conn::OVERSIZE_FRAME))) {
+                    // M§5.4 (spec-gap 180): the same sync would bring the same frame; the next asks for fewer items.
+                    // Already at one, the redial's backoff (§13.2) is the wait before the same sync.
+                    self.m.too_large();
+                }
                 host.output(&self.m, Output::ConnectionError(e.to_string())).await;
                 self.lost_connection();
             }

@@ -137,3 +137,30 @@ pub fn items(key: &KeyPair, to: &str, now: i64, in_reply_to: Option<&str>, items
     }
     message(key, "items", to, now, TTL_S, fields)
 }
+
+/// The `items` envelope `build` makes of the longest prefix of `items` whose frame fits the `ws/1.0` cap, `next` the
+/// last cursor it carries when any are left out (`next` as the page had it otherwise). The page the mailbox machine
+/// chose bounds the count (`limit`); this bounds the bytes, which the machine does not see. A device follows `next`
+/// with another sync, as it does for a page `limit` cut short. One item always goes: `MAX_MLS_BYTES` makes any item
+/// fit. Found on a phone whose 54 items (44,756 bytes, about 80 KB as one frame) were sent as one page: it refused the
+/// frame, reconnected and synced from the start again, every second.
+///
+/// Spec: M§5.4 ("A mailbox MUST paginate so every `items` envelope fits the transport cap"), §13.2 (65,536 bytes).
+/// Impl: the prefix is found by measuring the signed frame (a binary search over the prefix's length), not estimated
+/// from the items' sizes. The mailbox machine pages by count; this is the paging by bytes the `items-pages` vectors test
+/// (spec-gap 180).
+pub fn fit_items(items: Vec<Value>, next: Value, build: impl Fn(Vec<Value>, Value) -> Envelope) -> Envelope {
+    let fits = |env: &Envelope| env.frame().len() <= dsip_core::WS_MAX_ENVELOPE_BYTES;
+    let whole = build(items.clone(), next.clone());
+    if items.len() <= 1 || fits(&whole) {
+        return whole;
+    }
+    let page = |k: usize| build(items[..k].to_vec(), items[k - 1]["cursor"].clone());
+    // the longest k in 1..items.len() that fits; 1 is taken even if it does not (it cannot, by MAX_MLS_BYTES)
+    let (mut lo, mut hi) = (1, items.len() - 1);
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if fits(&page(mid)) { lo = mid } else { hi = mid - 1 }
+    }
+    page(lo)
+}

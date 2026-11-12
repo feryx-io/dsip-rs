@@ -68,6 +68,7 @@ pub fn run_vector(v: &Value) -> Value {
         "blob-replicate" => mailbox::blob_replicate(inp),
         "blob-fetch" => client::blob_fetch(inp),
         "items-blobs" => mailbox::items_blobs(inp),
+        "items-pages" => mailbox::items_pages(v),
         "blob-sources" => client::blob_sources(inp),
         "voicemail-offer" => client::voicemail_offer(inp),
         "call-event" => client::call_event_decision(inp),

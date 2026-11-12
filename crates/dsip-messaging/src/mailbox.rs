@@ -832,6 +832,54 @@ pub fn blob_replicate(inp: &Value) -> Value {
     json!({"action": "store"})
 }
 
+/// The `items-pages` check: a mailbox holding `input.items` answers a `sync` from `null`, and the device follows each
+/// `next` until it is `null`. Each page is what the mailbox service sends: the machine's page by count (`limit`), then
+/// [`crate::wire::fit_items`] by bytes, signed with the fixture key `context.mailbox_key`. Reports what every
+/// conforming mailbox shares, not where it splits: `{cursors, fit, within_limit, next_chain}`.
+///
+/// Spec: M§5.4 (every `items` envelope fits the transport cap; spec-gap 180), §13.2 (65,536 bytes).
+pub fn items_pages(v: &Value) -> Value {
+    let (ctx, inp) = (&v["context"], &v["input"]);
+    let key = dsip_core::keys::KeyPair::from_fixture_name(ctx["mailbox_key"].as_str().unwrap_or(""));
+    let (device, now) = (ctx["device"].as_str().unwrap_or(""), ctx["now"].as_i64().unwrap_or(0));
+    let limit = inp["limit"].as_u64().unwrap_or(200) as usize;
+    let sync_id = crate::wire::new_id(now);
+    let mut rest: Vec<Value> = inp["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|it| {
+            let mut o = it.clone();
+            let n = o.as_object_mut().and_then(|m| m.remove("mls_bytes")).and_then(|n| n.as_u64()).unwrap_or(0);
+            o["mls"] = json!(dsip_core::b64::encode(&vec![0u8; n as usize]));
+            o
+        })
+        .collect();
+    let (mut cursors, mut fit, mut within, mut chain) = (vec![], true, true, true);
+    loop {
+        let k = limit.min(rest.len());
+        let next = if rest.len() > k { rest[k - 1]["cursor"].clone() } else { Value::Null };
+        let env = crate::wire::fit_items(rest[..k].to_vec(), next, |items, next| {
+            crate::wire::items(&key, device, now, Some(&sync_id), items, next)
+        });
+        fit &= env.frame().len() <= dsip_core::WS_MAX_ENVELOPE_BYTES;
+        let p = crate::wire::payload_of(&env).unwrap_or_default();
+        let page = p["items"].as_array().cloned().unwrap_or_default();
+        within &= page.len() <= limit;
+        cursors.extend(page.iter().map(|it| it["cursor"].clone()));
+        rest.drain(..page.len().min(rest.len()));
+        if p["next"].is_null() {
+            chain &= rest.is_empty();
+            break;
+        }
+        chain &= page.last().is_some_and(|l| l["cursor"] == p["next"]);
+        if page.is_empty() {
+            break;
+        }
+    }
+    json!({"cursors": cursors, "fit": fit, "within_limit": within, "next_chain": chain})
+}
+
 /// The `blobs` manifest a mailbox puts in `items`: `uri` at its own blob endpoint for every blob it holds.
 ///
 /// Spec: M§8.4 rule 6 ("rewrite `uri` in `items`"). Impl (spec-gap 65): only held blobs are rewritten.
