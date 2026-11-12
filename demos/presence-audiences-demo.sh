@@ -16,7 +16,8 @@ $B/dsip identity init --dir "$D/bob" --name Bob >/dev/null
 BOB=$(python3 -c "import json;print(json.load(open('$D/bob/identity.json'))['identity'])")
 $B/dsip-relay --listen 127.0.0.1:8464 --state "$D/relay" >"$D/relay.log" 2>&1 & RELAY=$!
 trap 'kill $(jobs -p) 2>/dev/null || true' EXIT; sleep 1.5; CA="$D/relay/cert.pem"
-fail() { echo "FAIL: $*"; for f in "$D"/*.log; do echo "--- $f"; cat "$f"; done; exit 1; }
+# the message again last: CI keeps only the tail of a demo's output
+fail() { echo "FAIL: $*"; for f in "$D"/*.log; do echo "--- $f"; cat "$f"; done; echo "FAIL: $*"; exit 1; }
 
 # grant_to WHO OPTIONS: WHO introduces herself; Bob grants the latest request with OPTIONS (§19.4)
 grant_to() {
