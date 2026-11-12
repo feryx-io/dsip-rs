@@ -1035,10 +1035,20 @@ pub struct Resume {
     cursor: Option<String>,
     groups: BTreeMap<String, (i64, BTreeSet<i64>)>,
     joined: BTreeSet<String>,
+    /// The device's own `limit` (vector `context.limit`; `None`: it sends none). Not durable: a restart returns to it.
+    base_limit: Option<i64>,
+    /// The `limit` its syncs carry now, halved for each envelope over the cap (spec-gap 180).
+    limit: Option<i64>,
 }
 
+/// The `limit` a device that sent none sends after an envelope over the cap (M§5.4: "a `limit` of its choosing").
+///
+/// Impl (spec-gap 180): 100, half of the 200 the profile's example sends; it halves from there.
+pub const LIMIT_AFTER_TOO_LARGE: i64 = 100;
+
 impl Resume {
-    /// Durable state from a vector `context` or a previous [`Resume::snapshot`]: `cursor`, `groups`, `joined`.
+    /// Durable state from a vector `context` or a previous [`Resume::snapshot`]: `cursor`, `groups`, `joined`; and the
+    /// device's `limit`, when the context states one.
     pub fn new(ctx: &Value) -> Resume {
         let groups = ctx["groups"]
             .as_object()
@@ -1053,6 +1063,8 @@ impl Resume {
             cursor: ctx["cursor"].as_str().map(String::from),
             groups,
             joined: ctx["joined"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from).collect(),
+            base_limit: ctx["limit"].as_i64(),
+            limit: ctx["limit"].as_i64(),
         }
     }
 
@@ -1130,15 +1142,40 @@ impl Resume {
         self.cursor = None;
     }
 
-    /// The `sync` fields this state allows: `since`, and `ack_through` never ahead of the last commit.
-    pub fn sync_fields(&self) -> Value {
-        match &self.cursor {
-            Some(c) => json!({"since": c, "ack_through": c}),
-            None => json!({"since": null}),
+    /// The mailbox answered the last `sync` with an envelope over the cap (§13.2). The same `sync` would get the same
+    /// envelope, so the next one carries half the `limit`, at least 1. Returns `true` when the `limit` is already 1: the
+    /// mailbox is at fault, and the same `sync` waits out the §13.2 reconnection backoff.
+    ///
+    /// Spec: M§5.4 (spec-gap 180), M§5.1 (`MAX_MLS_BYTES` makes any one item fit).
+    pub fn too_large(&mut self) -> bool {
+        match self.limit {
+            Some(1) => true,
+            Some(n) => {
+                self.limit = Some((n / 2).max(1));
+                false
+            }
+            None => {
+                self.limit = Some(LIMIT_AFTER_TOO_LARGE);
+                false
+            }
         }
     }
 
-    /// Apply one trace event (`items` with optional `crash_at`, `sent`, `rejoined`, `sync`, `restart`, `cursor_invalid`).
+    /// The `sync` fields this state allows: `since`, `ack_through` never ahead of the last commit, and the `limit` when
+    /// there is one (M§5.4, spec-gap 180).
+    pub fn sync_fields(&self) -> Value {
+        let mut f = match &self.cursor {
+            Some(c) => json!({"since": c, "ack_through": c}),
+            None => json!({"since": null}),
+        };
+        if let Some(l) = self.limit {
+            f["limit"] = json!(l);
+        }
+        f
+    }
+
+    /// Apply one trace event (`items` with optional `crash_at`, `sent`, `rejoined`, `sync`, `restart`, `cursor_invalid`,
+    /// `too_large`).
     pub fn step(&mut self, ev: &Value) -> Vec<Value> {
         if let Some(e) = ev.get("items") {
             let mut out = vec![];
@@ -1172,12 +1209,18 @@ impl Resume {
             self.removed(e["group"].as_str().unwrap_or(""));
             return vec![];
         }
+        let mut out = vec![];
         if ev.get("restart").is_some() {
+            let base = self.base_limit;
             *self = Resume::new(&self.snapshot()); // only durable state survives
+            (self.base_limit, self.limit) = (base, base);
         } else if ev.get("cursor_invalid").is_some() {
             self.cursor_invalid();
+        } else if ev.get("too_large").is_some() && self.too_large() {
+            out.push(json!({"backoff": {}}));
         }
-        vec![json!({"sync": self.sync_fields()})]
+        out.push(json!({"sync": self.sync_fields()}));
+        out
     }
 
     /// The durable state, as the vectors compare it and as a device stores it.

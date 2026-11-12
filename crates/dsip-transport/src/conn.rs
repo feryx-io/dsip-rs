@@ -27,6 +27,10 @@ use dsip_core::keys::KeyPair;
 use dsip_core::ulid::Ulid;
 use dsip_core::version::Supported;
 use dsip_core::WS_MAX_ENVELOPE_BYTES;
+
+/// What [`Error::PeerViolation`] says of a received frame over the cap (§13.2), closed with 1009; a caller that must act
+/// on it (a device whose mailbox sent it, M§5.4) matches this.
+pub const OVERSIZE_FRAME: &str = "an oversize frame";
 use dsip_schema::SemanticContext;
 
 use crate::error::{Error, HelloFailure, Result};
@@ -209,7 +213,7 @@ impl Connection {
                         self.last_activity = std::time::Instant::now();
                         if t.len() > WS_MAX_ENVELOPE_BYTES {
                             self.close(CloseCode::Size, "envelope too large").await;
-                            return Err(Error::PeerViolation("an oversize frame"));
+                            return Err(Error::PeerViolation(OVERSIZE_FRAME));
                         }
                         return Ok(Some(t.to_string()));
                     }
@@ -224,7 +228,7 @@ impl Connection {
                     Some(Ok(WsMessage::Close(_))) | None => return Ok(None),
                     Some(Err(tokio_tungstenite::tungstenite::Error::Capacity(_))) => {
                         self.close(CloseCode::Size, "envelope too large").await;
-                        return Err(Error::PeerViolation("an oversize frame"));
+                        return Err(Error::PeerViolation(OVERSIZE_FRAME));
                     }
                     Some(Err(e)) => return Err(e.into()),
                 },

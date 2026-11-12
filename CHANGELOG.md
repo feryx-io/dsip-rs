@@ -7,6 +7,15 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+### Added
+
+- `dsip-messaging-device`, `dsip-messenger`: a device whose mailbox sends a frame over the cap (closed with 1009) syncs
+  again with half the `limit`, at least 1, instead of the same `sync` (M§5.4, spec-gap 180); one that sent none asks
+  for 100. At 1 the redial's backoff is the wait. The reduced `limit` is not saved, so a restart drops it.
+  `Messenger::too_large`, `Resume::too_large`; `dsip_transport::conn::OVERSIZE_FRAME` names the error.
+- `dsip-messaging`: the `items-pages` vectors (M§5.4, spec-gap 180) run against `wire::fit_items`, the mailbox
+  service's paging by bytes, moved here from `dsip-mailbox`; `resume-trace` `too_large`.
+
 ## [2026-11-11.1] — workspace release
 
 The mailbox's sync pages fit the transport's frame cap: a phone with many messages waiting no longer loops

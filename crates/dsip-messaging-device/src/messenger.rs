@@ -1065,6 +1065,15 @@ impl<S: Store> Messenger<S> {
             .map_err(|v| v.code.and_then(|c| serde_json::to_value(c).ok()).and_then(|c| c.as_str().map(String::from)).unwrap_or_default())
     }
 
+    /// The mailbox sent a frame over the `ws/1.0` cap (§13.2), which the connection refused: the next `sync` asks for
+    /// half as many items. Returns `true` when it already asked for one, so the mailbox is at fault and the device waits
+    /// out the reconnection backoff before the same `sync`. The reduced `limit` is not saved: a restart drops it.
+    ///
+    /// Spec: M§5.4 (spec-gap 180).
+    pub fn too_large(&mut self) -> bool {
+        self.resume.too_large()
+    }
+
     /// A `sync` for this identity's mailbox (M§5.4): `since`/`ack_through` from the durable state, `live` once asked.
     pub fn sync_frame(&mut self, live: bool, now: f64) -> String {
         self.want_live |= live;
