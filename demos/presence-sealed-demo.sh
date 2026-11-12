@@ -17,7 +17,8 @@ did() { python3 -c "import json;print(json.load(open('$D/$1/identity.json'))['id
 BOB=$(did bob-phone); ALICE=$(did alice)
 $B/dsip-relay --listen 127.0.0.1:8468 --state "$D/relay" --presence-grace 2 >"$D/relay.log" 2>&1 & RELAY=$!
 trap 'kill $(jobs -p) 2>/dev/null || true' EXIT; sleep 1.5; CA="$D/relay/cert.pem"
-fail() { echo "FAIL: $*"; for f in "$D"/*.log; do echo "--- $f"; cat "$f"; done; exit 1; }
+# the message again last: CI keeps only the tail of a demo's output
+fail() { echo "FAIL: $*"; for f in "$D"/*.log; do echo "--- $f"; cat "$f"; done; echo "FAIL: $*"; exit 1; }
 C=(--relay $R --ca "$CA")
 
 # $1 grantee, $2 extra answer flags: the grantee introduces itself and Bob's phone grants it (§19.4)

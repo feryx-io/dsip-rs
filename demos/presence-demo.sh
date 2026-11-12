@@ -17,7 +17,8 @@ $B/dsip identity init --dir "$D/bob-laptop" --name Bob --controller-from "$D/bob
 BOB=$(python3 -c "import json;print(json.load(open('$D/bob-phone/identity.json'))['identity'])")
 $B/dsip-relay --listen 127.0.0.1:8463 --state "$D/relay" --presence-grace 2 >"$D/relay.log" 2>&1 & RELAY=$!
 trap 'kill $(jobs -p) 2>/dev/null || true' EXIT; sleep 1.5; CA="$D/relay/cert.pem"
-fail() { echo "FAIL: $*"; for f in "$D"/*.log; do echo "--- $f"; cat "$f"; done; exit 1; }
+# the message again last: CI keeps only the tail of a demo's output
+fail() { echo "FAIL: $*"; for f in "$D"/*.log; do echo "--- $f"; cat "$f"; done; echo "FAIL: $*"; exit 1; }
 
 echo "=== private by default: Alice has no grant of Bob's, so his relay refuses her (P§6, §9.2)"
 $B/dsip answer --identity "$D/bob-phone" --relay $R --ca "$CA" --first-contact --script "sleep 8; grant; sleep 3; quit" >"$D/grant.log" 2>&1 & G=$!
@@ -54,7 +55,8 @@ seen = [m.group(1) for m in re.finditer(r"presence: (\S+)", open(sys.argv[1]).re
 firsts = [s for i, s in enumerate(seen) if s not in seen[:i]]
 assert firsts.index("busy") < firsts.index("away") < firsts.index("available"), firsts
 EOF
-wait $PHONE $LAPTOP
+wait $PHONE || fail "Bob's phone exited with status $? while publishing"
+wait $LAPTOP || fail "Bob's laptop exited with status $? while publishing"
 ! grep -q "^← error" "$D/phone.log" "$D/laptop.log" || fail "the authority refused a record"
 
 echo "=== Bob's phone revokes the grant at his relay; Alice's watch ends at once (P§7, §19.4)"
