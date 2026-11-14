@@ -232,6 +232,11 @@ pub struct InvitePatch {
     #[serde(default)]
     #[cfg_attr(feature = "ts", tsify(type = "unknown", optional))]
     pub destination: Option<Value>,
+    /// Offer video in this invite (B§3.4), or not, whatever the endpoint's default (`CoreConfig::video`). Its media leg
+    /// must have a video section to match (B§2.1): [`crate::MediaRequest::Offer`]'s `video` says so.
+    #[serde(default)]
+    #[cfg_attr(feature = "ts", tsify(optional))]
+    pub video: Option<bool>,
 }
 
 impl InvitePatch {
@@ -519,6 +524,11 @@ impl Core {
     /// Whether outbound session bodies are sealed (§10.4).
     pub fn seal(&self) -> bool {
         self.cfg.seal
+    }
+
+    /// Whether invites offer video unless they say otherwise ([`InvitePatch::video`]), and escalations re-offer it.
+    pub fn video(&self) -> bool {
+        self.cfg.video
     }
 
     /// This side's recording declaration, `{state, recorder, purpose?}`, from now on (Recording Profile C§3): it
@@ -1267,7 +1277,8 @@ impl Core {
                 }
             }
             "invite" => {
-                let offer = self.media_offer(self.cfg.video);
+                let video = self.invite_patch.as_ref().and_then(|p| p.video).unwrap_or(self.cfg.video);
+                let offer = self.media_offer(video);
                 self.offers.insert(session.clone(), offer.clone());
                 p["intent"] = "interactive".into();
                 p["identity"] = json!({"display_name": self.keys.display_name, "claims": std::mem::take(&mut self.pending_claims)});

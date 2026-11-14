@@ -243,3 +243,99 @@ async fn a_did_key_bound_elsewhere_is_called_through_the_relay_its_hint_names() 
     call.hang_up();
     assert_eq!(within("bye at Bob", theirs_call.ended()).await, "user.hangup");
 }
+
+/// A phone whose media has video: the sender its encoder writes to, and what its decoder is given.
+struct VideoPhone {
+    phone: Phone,
+    frames: tokio::sync::mpsc::UnboundedSender<dsip_media::VideoFrame>,
+    received: tokio::sync::mpsc::UnboundedReceiver<dsip_media::VideoFrame>,
+}
+
+async fn video_phone(net: &Network, name: &str, answer: AnswerPolicy) -> VideoPhone {
+    let (frames, feed) = dsip_media::VideoFeed::channel();
+    let (sink, received) = tokio::sync::mpsc::unbounded_channel();
+    let media = dsip_phone::Media::Native(dsip_media::MediaConfig {
+        source: dsip_media::Source::Tone { hz: 440.0 },
+        video: Some(dsip_media::VideoConfig { source: Some(feed), sink: Some(sink), ..Default::default() }),
+        ..Default::default()
+    });
+    let phone = Phone::builder().identity(net.identity(name)).dialer(net.dialer()).media(media).answer(answer).build().await.unwrap();
+    VideoPhone { phone, frames, received }
+}
+
+/// An H.264 keyframe (SPS, PPS, IDR), `n` in its bytes.
+fn keyframe(n: u32) -> dsip_media::VideoFrame {
+    let mut f = vec![0, 0, 0, 1, 0x67, 0x42, 0xe0, 0x1f, 0xda, 0, 0, 0, 1, 0x68, 0xce, 0x3c, 0x80, 0, 0, 0, 1, 0x65];
+    f.extend((0..3_000u32).map(|i| ((n + i) % 250 + 1) as u8));
+    dsip_media::VideoFrame { data: f.into(), keyframe: true, timestamp: n * 3_000 }
+}
+
+/// Feed `frames` a keyframe every 33 ms until the returned task is aborted.
+fn camera(frames: tokio::sync::mpsc::UnboundedSender<dsip_media::VideoFrame>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        for n in 0.. {
+            if frames.send(keyframe(n)).is_err() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(33)).await;
+        }
+    })
+}
+
+#[tokio::test]
+async fn a_video_call_carries_video_both_ways() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    if !dsip_media::Backend::available().contains(&dsip_media::Backend::Forge) {
+        return; // video is the forge backend's for now
+    }
+    let net = Network::new();
+    let mut alice = video_phone(&net, "Alice", AnswerPolicy::Ring).await;
+    let mut bob = video_phone(&net, "Bob", AnswerPolicy::Accept).await;
+    let (ca, cb) = (camera(alice.frames.clone()), camera(bob.frames.clone()));
+
+    let mut call = alice.phone.video_call(bob.phone.identity()).await.unwrap();
+    let theirs = within("incoming call", bob.phone.incoming()).await.unwrap().call;
+    assert!(matches!(within("answer", call.outcome()).await, Outcome::Answered { .. }));
+    within("both sides know it is a video call", async {
+        while !(call.video() && theirs.video()) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    // B§3.4: each side's frames reach the other's decoder, whole
+    let a = within("video at Alice", alice.received.recv()).await.unwrap();
+    let b = within("video at Bob", bob.received.recv()).await.unwrap();
+    assert!(a.keyframe && b.keyframe && a.data.len() > 3_000 && b.data.len() > 3_000);
+    call.hang_up();
+    ca.abort();
+    cb.abort();
+}
+
+#[tokio::test]
+async fn a_plain_call_between_video_phones_offers_no_video() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    if !dsip_media::Backend::available().contains(&dsip_media::Backend::Forge) {
+        return;
+    }
+    let net = Network::new();
+    let alice = video_phone(&net, "Alice", AnswerPolicy::Ring).await;
+    let mut bob = video_phone(&net, "Bob", AnswerPolicy::Accept).await;
+    let ca = camera(alice.frames.clone());
+
+    // video is per call (Phone::video_call): a plain call is audio only, so a callee whose answer to video its
+    // caller would refuse (dsip-rs before 2026-11-14) is never offered it
+    let mut call = alice.phone.call(bob.phone.identity()).await.unwrap();
+    let theirs = within("incoming call", bob.phone.incoming()).await.unwrap().call;
+    assert!(matches!(within("answer", call.outcome()).await, Outcome::Answered { .. }));
+    within("audio both ways", async {
+        while !(call.media_received() && theirs.media_received()) {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(bob.received.try_recv().is_err(), "a plain call carried video");
+    assert!(!call.video() && !theirs.video());
+    call.hang_up();
+    ca.abort();
+}

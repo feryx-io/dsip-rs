@@ -207,6 +207,8 @@ pub struct Phone {
     device: String,
     relay_did: String,
     relay_wake: Option<serde_json::Value>,
+    /// Whether the phone's media has a video section, for [`Phone::video_call`].
+    video: bool,
     task: Mutex<Option<tokio::task::JoinHandle<Result<()>>>>,
 }
 
@@ -229,6 +231,13 @@ impl Phone {
     /// Call `to` (an identity, ringing every device it has bound, or one device).
     pub async fn call(&self, to: &str) -> Result<Call> {
         self.call_with(to, Invite::default()).await
+    }
+
+    /// Call `to` with video as well as audio (B§3.4), when the phone's media has a video section; else as
+    /// [`Phone::call`]. A callee that takes no video answers audio only, and the call goes on.
+    pub async fn video_call(&self, to: &str) -> Result<Call> {
+        let patch = dsip_endpoint::InvitePatch { video: Some(self.video), ..Default::default() };
+        self.call_with(to, Invite { patch, ..Default::default() }).await
     }
 
     /// Call `to` with what the host adds to the invite (claims, the PSTN number asked of a gateway).
@@ -481,6 +490,7 @@ impl PhoneBuilder {
         };
         let home = relay_url.clone();
         let has_media = !matches!(self.media, Media::None);
+        let video = self.media.video();
         let mut calls = dsip_endpoint::CallsConfig { media: has_media, answer: self.answer, ..Default::default() };
         if let Some(r) = self.recording {
             calls.recording = r;
@@ -488,8 +498,10 @@ impl PhoneBuilder {
         let mut cfg = AgentConfig {
             relay_url,
             tls: self.tls,
-            // invites offer video when the phone's media carries it (B§3.4); every leg then has a video section
-            video: self.media.video(),
+            // Impl: video is chosen per call ([`Phone::video_call`]); an invite offering it to every callee would reach
+            // apps whose answer to a video offer their caller refuses (dsip-rs before 2026-11-14 described a refused
+            // section, B§2.1)
+            video: false,
             t_establish: None,
             t_ring: None,
             t_ring_local: None,
@@ -516,7 +528,7 @@ impl PhoneBuilder {
         let line = Line { cmds, wake: agent.waker() };
         let task = tokio::spawn(run::Runner::new(agent, cmds_rx, line.clone(), incoming_tx, issued_tx, presence_tx, (self.media, self.turn)).run());
         Ok(Phone { line, relay_url: home, hints: self.hints, incoming: Mutex::new(incoming), issued: Mutex::new(issued), presence, identity, device,
-                   relay_did, relay_wake, task: Mutex::new(Some(task)) })
+                   relay_did, relay_wake, video, task: Mutex::new(Some(task)) })
     }
 }
 
@@ -527,6 +539,7 @@ pub struct Call {
     state: watch::Receiver<CallState>,
     error: Arc<std::sync::Mutex<Option<String>>>,
     heard: Arc<std::sync::atomic::AtomicBool>,
+    video: Arc<std::sync::atomic::AtomicBool>,
     line: Line,
 }
 
@@ -556,6 +569,12 @@ impl Call {
     /// Whether media from the other side has arrived: the first RTP packet, decrypted (native media only).
     pub fn media_received(&self) -> bool {
         self.heard.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Whether the call carries video (B§3.4): it was offered with it ([`Phone::video_call`], or a caller's offer this
+    /// phone could take), and the answer did not refuse it. Known once the offer or answer is made (native media only).
+    pub fn video(&self) -> bool {
+        self.video.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Wait for the next change of state; the state it changed to, or `None` once the phone has closed.

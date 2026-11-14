@@ -21,7 +21,13 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 - `dsip-endpoint`: an answer's `media[]` follows its SDP: a section the SDP refused (port 0) is left out, and each
   codec is the one the `m=` line put first (B§2.1). Before, a refused video section was still described, and a
   caller checking the answer ended the call `media.failed`.
-- `dsip-phone`: calls offer video when the phone's `Media::Native` carries a video section (`Media::video`).
+- `dsip-phone`: video per call. `Phone::video_call` offers video (when the phone's `Media::Native` has a video
+  section, `Media::video`); `Phone::call` stays audio only, so a callee whose answer to video its caller would refuse
+  (dsip-rs before this release described a refused section, B§2.1) is never offered it. An incoming call gets a video
+  section only when its offer carries a live `m=video`. `Call::video` says whether a call carries video.
+- `dsip-endpoint`: `InvitePatch::video` offers video in one invite whatever `CoreConfig::video` says;
+  `MediaRequest::Offer` gains `video` so the host's leg matches the descriptors (B§2.1); `Core::video`. Breaking:
+  `InvitePatch` and `MediaRequest::Offer` gain fields.
 
 ## [2026-11-11.2] — workspace release
 

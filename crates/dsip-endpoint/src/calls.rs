@@ -80,6 +80,8 @@ pub enum MediaRequest {
         session: String,
         /// Add the local source before offering.
         add_source: bool,
+        /// The offer carries video (B§3.4): the leg needs a video section, so the SDP matches the descriptors (B§2.1).
+        video: bool,
     },
     /// Answer `offer` on the session's media leg, making the leg if it has none, and answer [`MediaResult::Answer`].
     /// With `screening`, on a fresh leg that sends nothing (§14.4).
@@ -414,10 +416,11 @@ impl Calls {
 
     fn offer_or_place(&mut self, core: &mut Core, session: &str, to: String, invite: Invite, now: i64) -> Result<Vec<CallOut>> {
         if self.cfg.media {
+            let video = invite.patch.video.unwrap_or(core.video());
             if let Some(c) = self.calls.get_mut(session) {
                 c.awaiting = Some(Awaiting::Place { to, invite: Box::new(invite) });
             }
-            return Ok(vec![CallOut::Media(MediaRequest::Offer { session: session.to_string(), add_source: false })]);
+            return Ok(vec![CallOut::Media(MediaRequest::Offer { session: session.to_string(), add_source: false, video })]);
         }
         self.run(core, Command::PlaceCall { session: session.to_string(), to, invite }, now)
     }
@@ -711,7 +714,8 @@ impl Calls {
         let answered_by = escalate.then_some("user");
         if let (true, Some(call)) = (self.cfg.media, self.calls.get_mut(&session)) {
             call.awaiting = Some(Awaiting::Update { answered_by });
-            return Ok(vec![CallOut::Media(MediaRequest::Offer { session, add_source: escalate })]);
+            let video = core.video();
+            return Ok(vec![CallOut::Media(MediaRequest::Offer { session, add_source: escalate, video })]);
         }
         let id = core.new_id(now);
         self.run(core, Command::Update { session, id, answered_by: answered_by.map(String::from), sdp: None }, now)
