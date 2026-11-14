@@ -10,12 +10,14 @@ use std::time::Duration;
 use dsip_media::{Backend, Bytes, MediaConfig, MediaEvent, MediaLeg, Source, VideoConfig, VideoFeed, VideoFrame};
 use tokio::sync::mpsc;
 
-fn init() {
+/// Set up logging; whether the forge backend is in this build (CI also builds dsip-media with webrtc-rs alone).
+fn init() -> bool {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_test_writer()
         .try_init();
+    Backend::available().contains(&Backend::Forge)
 }
 
 /// An Annex B H.264 frame of `size` bytes: SPS, PPS and an IDR slice for a keyframe, else a non-IDR slice. Its
@@ -65,7 +67,9 @@ async fn connect(a: &mut Side, b: &mut Side) {
 
 #[tokio::test]
 async fn frames_cross_whole_both_ways() {
-    init();
+    if !init() {
+        return;
+    }
     let (mut a, mut b) = (side(true).await, side(true).await);
     connect(&mut a, &mut b).await;
     // 3 s of 30 fps from each side: a keyframe a second, 6 KB keyframes over several packets, 1.5 KB deltas
@@ -102,7 +106,9 @@ async fn frames_cross_whole_both_ways() {
 
 #[tokio::test]
 async fn an_audio_only_answerer_refuses_video_and_the_call_goes_on() {
-    init();
+    if !init() {
+        return;
+    }
     let (mut a, mut b) = (side(true).await, side(false).await);
     let offer = a.leg.create_offer().await.unwrap();
     assert!(offer.contains("m=video"), "the offer carries video");
