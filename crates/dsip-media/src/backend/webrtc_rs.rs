@@ -47,6 +47,10 @@ pub struct WebRtcRsLeg {
 impl WebRtcRsLeg {
     /// Build the peer connection and local track; nothing is sent until [`WebRtcRsLeg::start_sending`].
     pub async fn new(cfg: MediaConfig) -> Result<WebRtcRsLeg> {
+        // Impl: video is carried by the forge backend only, for now; the cross-backend video test waits for this one.
+        if cfg.video.is_some() {
+            return Err(crate::Error::VideoUnsupported { backend: "webrtc-rs" });
+        }
         let mut me = MediaEngine::default();
         me.register_default_codecs().at("codecs")?;
         let mut registry = Registry::new();
@@ -257,6 +261,7 @@ impl WebRtcRsLeg {
             packets_in: self.packets_in.load(Ordering::Relaxed),
             bytes_in: self.bytes_in.load(Ordering::Relaxed),
             frames_out: self.frames_out.load(Ordering::Relaxed),
+            ..Stats::default()
         }
     }
 

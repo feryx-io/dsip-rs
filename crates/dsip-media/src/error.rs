@@ -20,6 +20,12 @@ pub enum Error {
         /// The backends this build has.
         available: Vec<&'static str>,
     },
+    /// A leg asked for video on a backend that does not carry it yet.
+    #[error("media backend {backend} does not carry video yet")]
+    VideoUnsupported {
+        /// The backend.
+        backend: &'static str,
+    },
     /// A media source that does not parse.
     #[error("unknown media source {0} (none | tone[:hz] | file:<path.ogg>)")]
     UnknownSource(String),

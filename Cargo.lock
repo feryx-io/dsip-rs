@@ -1462,6 +1462,7 @@ version = "0.1.1"
 dependencies = [
  "audiopus",
  "bytes",
+ "forge-rtp 0.7.1",
  "forge-webrtc 0.8.1",
  "rtp",
  "rustls",

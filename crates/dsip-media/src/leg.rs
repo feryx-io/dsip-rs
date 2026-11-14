@@ -119,13 +119,16 @@ pub struct MediaConfig {
     pub tap_in: Option<tokio::sync::mpsc::UnboundedSender<bytes::Bytes>>,
     /// Every outbound Opus frame is also sent here (C§6: this side's voice, for the recorder leg).
     pub tap_out: Option<tokio::sync::mpsc::UnboundedSender<bytes::Bytes>>,
+    /// A video section as well as the audio one (B§3.4); `None` offers audio only and refuses offered video (its
+    /// section answered with port 0).
+    pub video: Option<crate::video::VideoConfig>,
 }
 
 impl Default for MediaConfig {
     /// Sends nothing, records nothing, no STUN or TURN, the default backend.
     fn default() -> MediaConfig {
         MediaConfig { source: Source::None, record: None, stun: vec![], turn: vec![], backend: Backend::default(), send_only: false,
-                      tap_in: None, tap_out: None }
+                      tap_in: None, tap_out: None, video: None }
     }
 }
 
@@ -149,6 +152,12 @@ pub struct Stats {
     pub bytes_in: u64,
     /// Outbound Opus frames.
     pub frames_out: u64,
+    /// Inbound video frames, whole, handed to the sink.
+    pub video_frames_in: u64,
+    /// Outbound video frames.
+    pub video_frames_out: u64,
+    /// Keyframe requests sent (PLI).
+    pub keyframes_asked: u64,
 }
 
 /// A peer connection with one audio track, on whichever backend was asked for.

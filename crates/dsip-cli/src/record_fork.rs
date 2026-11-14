@@ -76,7 +76,7 @@ pub async fn run(f: Fork, mut stop: oneshot::Receiver<()>, mut paused: watch::Re
     let mut legs: HashMap<String, Leg> = HashMap::new();
     for (participant, feed) in f.feeds {
         let leg = MediaLeg::new(MediaConfig { source: Source::Feed(feed), record: None, stun: vec![], turn: vec![], backend,
-                                              send_only: true, tap_in: None, tap_out: None }).await?;
+                                              send_only: true, tap_in: None, tap_out: None, video: None }).await?;
         let rs = json!({"of": f.of, "participants": participants, "streams": [{"media": 0, "participant": participant}]});
         let invite = Invite {
             sdp: Some(leg.create_offer().await?),
