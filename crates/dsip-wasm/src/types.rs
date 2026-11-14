@@ -124,7 +124,7 @@ export interface MailboxSelection {
 }
 
 /** Whether a voicemail may be offered (M§13.2). */
-export type VoicemailOffer = { offer: false } | { offer: true; max_duration_s?: number };
+export type VoicemailOffer = { offer: false } | { offer: true; kind: "audio" | "video"; max_duration_s?: number };
 "#;
 
 /// A JSON value with a declared TypeScript type, crossing the boundary as it is.
