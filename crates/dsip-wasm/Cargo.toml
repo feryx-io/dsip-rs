@@ -1,7 +1,7 @@
 [package]
 name = "dsip-wasm"
 description = "DSIP endpoint core for the browser: verifier, §12 engine, payload builder via wasm-bindgen"
-version.workspace = true
+version = "0.2.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
