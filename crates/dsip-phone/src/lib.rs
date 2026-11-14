@@ -539,6 +539,7 @@ pub struct Call {
     state: watch::Receiver<CallState>,
     error: Arc<std::sync::Mutex<Option<String>>>,
     heard: Arc<std::sync::atomic::AtomicBool>,
+    video: Arc<std::sync::atomic::AtomicBool>,
     line: Line,
 }
 
@@ -568,6 +569,12 @@ impl Call {
     /// Whether media from the other side has arrived: the first RTP packet, decrypted (native media only).
     pub fn media_received(&self) -> bool {
         self.heard.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Whether the call carries video (B§3.4): it was offered with it ([`Phone::video_call`], or a caller's offer this
+    /// phone could take), and the answer did not refuse it. Known once the offer or answer is made (native media only).
+    pub fn video(&self) -> bool {
+        self.video.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Wait for the next change of state; the state it changed to, or `None` once the phone has closed.

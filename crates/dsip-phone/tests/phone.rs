@@ -294,8 +294,14 @@ async fn a_video_call_carries_video_both_ways() {
     let (ca, cb) = (camera(alice.frames.clone()), camera(bob.frames.clone()));
 
     let mut call = alice.phone.video_call(bob.phone.identity()).await.unwrap();
-    let _theirs = within("incoming call", bob.phone.incoming()).await.unwrap().call;
+    let theirs = within("incoming call", bob.phone.incoming()).await.unwrap().call;
     assert!(matches!(within("answer", call.outcome()).await, Outcome::Answered { .. }));
+    within("both sides know it is a video call", async {
+        while !(call.video() && theirs.video()) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
     // B§3.4: each side's frames reach the other's decoder, whole
     let a = within("video at Alice", alice.received.recv()).await.unwrap();
     let b = within("video at Bob", bob.received.recv()).await.unwrap();
@@ -329,6 +335,7 @@ async fn a_plain_call_between_video_phones_offers_no_video() {
     .await;
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(bob.received.try_recv().is_err(), "a plain call carried video");
+    assert!(!call.video() && !theirs.video());
     call.hang_up();
     ca.abort();
 }

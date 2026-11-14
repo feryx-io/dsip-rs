@@ -21,6 +21,8 @@ struct Track {
     error: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     #[cfg_attr(not(feature = "media"), allow(dead_code))] // only a native leg hears anything
     heard: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    #[cfg_attr(not(feature = "media"), allow(dead_code))]
+    video: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 pub(crate) struct Runner {
@@ -214,8 +216,10 @@ impl Runner {
     fn track(&mut self, session: String, state: CallState) -> Call {
         let (tx, rx) = watch::channel(state);
         let (error, heard) = (std::sync::Arc::default(), std::sync::Arc::<std::sync::atomic::AtomicBool>::default());
-        self.calls.insert(session.clone(), Track { state: tx, error: std::sync::Arc::clone(&error), heard: std::sync::Arc::clone(&heard) });
-        Call { session, via: None, state: rx, error, heard, line: self.line.clone() }
+        let video = std::sync::Arc::<std::sync::atomic::AtomicBool>::default();
+        self.calls.insert(session.clone(), Track { state: tx, error: std::sync::Arc::clone(&error), heard: std::sync::Arc::clone(&heard),
+                                                   video: std::sync::Arc::clone(&video) });
+        Call { session, via: None, state: rx, error, heard, video, line: self.line.clone() }
     }
 
     async fn observe(&mut self, events: Vec<AgentEvent>) -> Result<()> {
@@ -343,7 +347,20 @@ impl Runner {
 
     #[cfg(feature = "media")]
     async fn media(&mut self, req: MediaRequest) -> Result<()> {
-        self.legs.request(&mut self.agent, req).await
+        // whether the call carries video: its leg has a video section, and the answer did not refuse it (B§2.1)
+        let video = match &req {
+            MediaRequest::Offer { session, .. } | MediaRequest::Answer { session, .. } => Some((session.clone(), None)),
+            MediaRequest::ApplyAnswer { session, sdp } => Some((session.clone(), Some(legs::offers_video(sdp)))),
+            _ => None,
+        };
+        self.legs.request(&mut self.agent, req).await?;
+        if let Some((session, answered)) = video {
+            let on = self.legs.video(&session) && answered.unwrap_or(true);
+            if let Some(t) = self.calls.get(&session) {
+                t.video.store(on, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        Ok(())
     }
 
     #[cfg(not(feature = "media"))]
@@ -381,8 +398,8 @@ mod legs {
         video: bool,
     }
 
-    /// Whether an SDP offer carries video: an `m=video` section with a port (B§2.1; port 0 is a refused one).
-    fn offers_video(sdp: &str) -> bool {
+    /// Whether an SDP offer or answer carries video: an `m=video` section with a port (B§2.1; port 0 is a refused one).
+    pub(super) fn offers_video(sdp: &str) -> bool {
         sdp.lines().any(|l| l.strip_prefix("m=video ").is_some_and(|rest| !rest.starts_with("0 ")))
     }
 
@@ -430,6 +447,11 @@ mod legs {
             };
             let (tx, rx) = mpsc::unbounded_channel();
             Legs { cfg, turn, turned: None, turn_down_until: 0, legs: HashMap::new(), tx, rx, wake }
+        }
+
+        /// Whether `session`'s leg has a video section.
+        pub(super) fn video(&self, session: &str) -> bool {
+            self.legs.get(session).is_some_and(|l| l.video)
         }
 
         /// Make a leg for `session`, its events forwarded to the phone's task: with a video section only for a call
