@@ -33,6 +33,7 @@ async fn run(a: Backend, b: Backend) {
         send_only: false,
         tap_in: None,
         tap_out: None,
+        video: None,
     })
     .await
     .unwrap();
@@ -45,6 +46,7 @@ async fn run(a: Backend, b: Backend) {
         send_only: false,
         tap_in: None,
         tap_out: None,
+        video: None,
     })
     .await
     .unwrap();

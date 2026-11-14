@@ -17,6 +17,9 @@ webrtc = { version = "0.13", optional = true }
 webrtc-media = "0.10"
 rtp = "0.13"
 forge-webrtc = { git = "https://github.com/thevoiceguy/forge-media", tag = "v2026.11.01", optional = true }
+# Video packetization, frame assembly, retransmission and feedback (the leg's video, `video.rs`): forge-webrtc moves
+# pre-built packets, these build and read them.
+forge-rtp = { git = "https://github.com/thevoiceguy/forge-media", tag = "v2026.11.01", optional = true }
 audiopus = "0.3.0-rc.0"
 bytes = "1"
 
@@ -29,7 +32,7 @@ default = ["forge", "webrtc-rs"]
 # Backend: webrtc-rs (plan §7's named fallback).
 webrtc-rs = ["dep:webrtc"]
 # Backend: forge-media (the project's own stack; docs/forge-media-plan.md).
-forge = ["dep:forge-webrtc"]
+forge = ["dep:forge-webrtc", "dep:forge-rtp"]
 
 [dev-dependencies]
 tracing-subscriber.workspace = true

@@ -11,6 +11,17 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
   attempt offered video (`call_video`) and the callee's entry `accepts` `video`, else `audio` (DSIP spec-gap 184,
   M§13.2). `dsip-wasm`'s `voicemail_offer` takes an optional `call_video` and reads `accepts` from the entry.
 - DSIP spec: `spec/video-gaps-181-184` (5402a04; spec-gaps 181–184, video codecs and video voicemail).
+- `dsip-media`: video (B§3.4). `MediaConfig.video` (`VideoConfig`: codecs, a `VideoFeed` of coded frames to send, a
+  sink for the frames received, a channel for the far end's `VideoRequest`s, `max_kbps`) gives a leg a video section
+  after its audio one. On the forge backend frames are packetized (`forge_rtp::video`), kept for retransmission and
+  resent on NACK; received packets are assembled into whole frames, losses NACKed, and a keyframe asked for (PLI, at
+  most every 500 ms) when one cannot be repaired; the far end's PLI, FIR and REMB reach the host as `Keyframe` and
+  `Bitrate`. The webrtc-rs backend refuses video (`Error::VideoUnsupported`) for now. `Stats` counts video frames
+  in and out and keyframes asked for. Breaking: `MediaConfig` and `Stats` gain fields.
+- `dsip-endpoint`: an answer's `media[]` follows its SDP: a section the SDP refused (port 0) is left out, and each
+  codec is the one the `m=` line put first (B§2.1). Before, a refused video section was still described, and a
+  caller checking the answer ended the call `media.failed`.
+- `dsip-phone`: calls offer video when the phone's `Media::Native` carries a video section (`Media::video`).
 
 ## [2026-11-11.2] — workspace release
 

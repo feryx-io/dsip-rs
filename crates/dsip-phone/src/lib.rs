@@ -69,6 +69,17 @@ pub enum Media {
     Native(dsip_media::MediaConfig),
 }
 
+impl Media {
+    /// Whether calls carry video as well as audio: the native media has a video section.
+    pub fn video(&self) -> bool {
+        match self {
+            #[cfg(feature = "media")]
+            Media::Native(c) => c.video.is_some(),
+            Media::None => false,
+        }
+    }
+}
+
 /// Where a call is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -477,7 +488,8 @@ impl PhoneBuilder {
         let mut cfg = AgentConfig {
             relay_url,
             tls: self.tls,
-            video: false,
+            // invites offer video when the phone's media carries it (B§3.4); every leg then has a video section
+            video: self.media.video(),
             t_establish: None,
             t_ring: None,
             t_ring_local: None,

@@ -239,7 +239,7 @@ async fn new_leg(opts: &ConsoleOpts, screening: bool) -> Result<Media> {
     let backend = dsip_media::Backend::parse(&opts.media_backend)?;
     let leg = MediaLeg::new(MediaConfig { source, record: opts.record.clone(), stun: opts.stun.clone(), turn: opts.turn.clone(), backend,
                                          send_only: false, tap_in: opts.fork_taps.as_ref().map(|t| t.0.clone()),
-                                         tap_out: opts.fork_taps.as_ref().map(|t| t.1.clone()) }).await?;
+                                         tap_out: opts.fork_taps.as_ref().map(|t| t.1.clone()), video: None }).await?;
     Ok(Media { leg, screening })
 }
 

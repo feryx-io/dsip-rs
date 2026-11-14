@@ -5,7 +5,8 @@
 //! (SDP as a transport binding object — spec-gap 16), §12.12 (ICE candidates
 //! ride in signed `info` after ACTIVE; gathered candidates are handed to the
 //! host as they appear so it can buffer them), §14.4 (screening: a `recvonly`
-//! leg exposes no local media), §17.1 (Opus audio). The normative shapes are
+//! leg exposes no local media), §17.1 (Opus audio), B§3.4 (video: coded frames in and out, [`video`]). The
+//! normative shapes are
 //! in the WebRTC Media Binding draft (`v1.0/dsip-webrtc-media-binding-v1.0.md`).
 //!
 //! Impl: two interchangeable backends behind one [`MediaLeg`] surface, chosen
@@ -33,10 +34,12 @@ pub mod error;
 pub mod leg;
 pub mod ogg;
 pub mod source;
+pub mod video;
 
 pub use error::{Error, Result};
 
 pub use leg::{Backend, Candidate, MediaConfig, MediaEvent, MediaLeg, Stats, TurnConfig};
 pub use source::{Feed, Source};
+pub use video::{VideoConfig, VideoFeed, VideoFrame, VideoRequest};
 /// Opus frames as the taps and feeds carry them.
 pub use bytes::Bytes;

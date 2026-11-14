@@ -1188,11 +1188,19 @@ impl Core {
         json!({"media": media, "transports": [self.transport()]})
     }
 
-    /// A selection from `offer`: first codec per descriptor; screening → audio `recvonly` only (§14.4).
+    /// A selection from `offer`: screening → audio `recvonly` only (§14.4). With the answer's SDP, a section it
+    /// refused (port 0) is left out and each codec is the one its `m=` line put first (B§2.1: `media[i]` is the
+    /// *i*-th non-rejected section, its codec one the SDP maps); without, the first codec offered.
     fn selection(offer: &Value, screening: bool, sdp: Option<String>) -> Value {
+        let answer = sdp.as_deref().and_then(dsip_webrtc_binding::parse_sdp);
         let mut media = vec![];
-        for m in offer["media"].as_array().into_iter().flatten() {
+        for (i, m) in offer["media"].as_array().into_iter().flatten().enumerate() {
             if screening && m["type"] != "audio" {
+                continue;
+            }
+            let section = answer.as_ref().and_then(|a| a.sections.get(i));
+            // B§2.1: a refused section has no descriptor in the answer
+            if section.is_some_and(|s| s.port == 0) {
                 continue;
             }
             // §14.2 subset rule: an offered sendonly is answered recvonly and vice versa (C§6: a recorder receives)
@@ -1205,8 +1213,9 @@ impl Core {
                     other => other,
                 }
             };
-            let codec = m["codecs"].as_array().and_then(|c| c.first()).cloned().unwrap_or(json!({}));
-            let mut d = json!({"type": m["type"], "direction": direction, "codecs": [{"id": codec["id"]}]});
+            let first = m["codecs"].as_array().and_then(|c| c.first()).cloned().unwrap_or(json!({}));
+            let id = section.and_then(selected_codec).map(Value::from).unwrap_or_else(|| first["id"].clone());
+            let mut d = json!({"type": m["type"], "direction": direction, "codecs": [{"id": id}]});
             if let Some(p) = m.get("purpose") {
                 d["purpose"] = p.clone();
             }
@@ -1343,4 +1352,50 @@ impl Core {
 /// The grantor of a grant we hold.
 fn identity_of_grant(ep: &Endpoint, id: &str) -> String {
     ep.contacts.grants_held.get(id).map(|g| g.identity.clone()).unwrap_or_default()
+}
+
+/// The DSIP codec an answer's `m=` section selected: its first payload type's `a=rtpmap` encoding, by B§3.4's table.
+fn selected_codec(section: &dsip_webrtc_binding::Section) -> Option<&'static str> {
+    let pt = section.formats.first()?;
+    let encoding = section.values("rtpmap").into_iter().find_map(|v| {
+        let (p, rest) = v.split_once(' ')?;
+        (p == pt).then(|| rest.split('/').next().unwrap_or("").to_string())
+    })?;
+    dsip_webrtc_binding::CODEC_ENCODING.iter().find(|(_, e)| e.eq_ignore_ascii_case(&encoding)).map(|(id, _)| *id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const OFFER_AV: &str = r#"{"media": [
+        {"type": "audio", "direction": "sendrecv", "codecs": [{"id": "codec:audio/opus"}]},
+        {"type": "video", "direction": "sendrecv", "codecs": [{"id": "codec:video/h264", "profiles": ["baseline"]},
+                                                             {"id": "codec:video/vp8"}]}],
+        "transports": [{"id": "transport:webrtc"}]}"#;
+
+    fn answer_sdp(video: &str) -> String {
+        format!("v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=rtpmap:111 opus/48000/2\r\n{video}")
+    }
+
+    #[test]
+    fn video_refused_with_port_zero_is_left_out_of_the_answer() {
+        let offer: Value = serde_json::from_str(OFFER_AV).unwrap();
+        let sdp = answer_sdp("m=video 0 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 H264/90000\r\n");
+        let sel = Core::selection(&offer, false, Some(sdp));
+        let media = sel["media"].as_array().unwrap();
+        assert_eq!(media.len(), 1, "{sel}");
+        assert_eq!(media[0]["type"], "audio");
+    }
+
+    #[test]
+    fn the_codec_is_the_one_the_answer_sdp_put_first() {
+        let offer: Value = serde_json::from_str(OFFER_AV).unwrap();
+        let sdp = answer_sdp("m=video 9 UDP/TLS/RTP/SAVPF 97\r\na=rtpmap:97 VP8/90000\r\n");
+        let sel = Core::selection(&offer, false, Some(sdp));
+        assert_eq!(sel["media"][1]["codecs"][0]["id"], "codec:video/vp8", "{sel}");
+        // without an SDP, the first offered
+        let sel = Core::selection(&offer, false, None);
+        assert_eq!(sel["media"][1]["codecs"][0]["id"], "codec:video/h264", "{sel}");
+    }
 }

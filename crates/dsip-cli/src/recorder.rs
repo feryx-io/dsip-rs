@@ -93,7 +93,7 @@ pub async fn run(identity: PathBuf, relay: String, ca: Option<PathBuf>, dir: Pat
                             // one file per recording session (C§6: one or more sessions per recorded call)
                             let file = dir.join(format!("{of}-{}.ogg", &sid[sid.len() - 8..]));
                             let leg = MediaLeg::new(MediaConfig { source: Source::None, record: Some(file.clone()), stun: vec![], turn: vec![], backend,
-                                                                  send_only: false, tap_in: None, tap_out: None }).await?;
+                                                                  send_only: false, tap_in: None, tap_out: None, video: None }).await?;
                             let offer = payload.pointer("/transports/0/sdp").and_then(Value::as_str).context("recording session without SDP")?;
                             let ans = leg.accept_offer(offer).await?;
                             agent.local(LocalEvent::Alert { session: sid.clone(), ring_timeout: Some(30) }).await?;
