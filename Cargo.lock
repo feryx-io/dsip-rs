@@ -1340,7 +1340,7 @@ dependencies = [
 
 [[package]]
 name = "dsip-endpoint"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "dsip-core",
  "dsip-recording",
@@ -1458,7 +1458,7 @@ dependencies = [
 
 [[package]]
 name = "dsip-media"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "audiopus",
  "bytes",
@@ -1478,7 +1478,7 @@ dependencies = [
 
 [[package]]
 name = "dsip-messaging"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "aes-gcm 0.10.3",
  "dsip-core",
@@ -1589,7 +1589,7 @@ dependencies = [
 
 [[package]]
 name = "dsip-phone"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "dsip-broadcast",
  "dsip-core",
@@ -1750,7 +1750,7 @@ dependencies = [
 
 [[package]]
 name = "dsip-wasm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "console_error_panic_hook",
  "dsip-broadcast",

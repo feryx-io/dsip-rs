@@ -7,10 +7,53 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+## [2026-11-14] — workspace release
+
+Video in the media leg: a call can carry H.264 or VP8 next to its audio, on the forge backend, with loss repair and
+keyframe requests; an answer now describes only the media its SDP accepted; and a voicemail offer says whether it may
+be video (DSIP spec-gaps 181–184). DSIP spec: `poc-v1.0.7` (was `poc-v1.0.6`).
+
+| Crate | Version |
+|---|---|
+| `dsip-broadcast` | 0.1.1 |
+| `dsip-cli` | 0.3.0 |
+| `dsip-core` | 0.2.0 |
+| `dsip-dht` | 0.2.0 |
+| `dsip-endpoint` | 0.4.1 (was 0.4.0) |
+| `dsip-events` | 0.2.0 |
+| `dsip-gateway` | 0.1.0 |
+| `dsip-kt` | 0.1.0 |
+| `dsip-mailbox` | 0.4.2 |
+| `dsip-media` | 0.2.0 (was 0.1.1) |
+| `dsip-messaging` | 0.6.0 (was 0.5.0) |
+| `dsip-messaging-device` | 0.6.0 |
+| `dsip-messenger` | 0.6.1 |
+| `dsip-mls` | 0.1.0 |
+| `dsip-node` | 0.1.1 |
+| `dsip-number` | 0.1.0 |
+| `dsip-phone` | 0.7.0 (was 0.6.0) |
+| `dsip-push` | 0.1.1 |
+| `dsip-recording` | 0.1.0 |
+| `dsip-relay` | 0.3.1 |
+| `dsip-schema` | 0.2.0 |
+| `dsip-session` | 0.2.0 |
+| `dsip-testkit` | 0.3.0 |
+| `dsip-transport` | 0.11.0 |
+| `dsip-wake` | 0.2.0 |
+| `dsip-wasm` | 0.2.0 (was 0.1.0) |
+| `dsip-webrtc-binding` | 0.1.0 |
+
+**Breaking changes**: `dsip-media`: `MediaConfig` and `Stats` gain fields (`video`; `video_frames_in`,
+`video_frames_out`, `keyframes_asked`), so struct literals without `..Default::default()` stop compiling (#62).
+`dsip-wasm`: `voicemail_offer` takes a fifth argument, `call_video` (optional in JavaScript), and its result gains
+`kind` (#61). `dsip-messaging` and `dsip-phone` take minor bumps for new behaviour and API (#61, #62).
+
+### Added and changed
+
 - `dsip-messaging`: `client::voicemail_offer` answers the voicemail's `kind` with every offer: `video` only when the
   attempt offered video (`call_video`) and the callee's entry `accepts` `video`, else `audio` (DSIP spec-gap 184,
   M§13.2). `dsip-wasm`'s `voicemail_offer` takes an optional `call_video` and reads `accepts` from the entry.
-- DSIP spec: `spec/video-gaps-181-184` (5402a04; spec-gaps 181–184, video codecs and video voicemail).
+- DSIP spec: `poc-v1.0.7` (spec-gaps 181–184: video codecs, the codec table, video content, video voicemail).
 - `dsip-media`: video (B§3.4). `MediaConfig.video` (`VideoConfig`: codecs, a `VideoFeed` of coded frames to send, a
   sink for the frames received, a channel for the far end's `VideoRequest`s, `max_kbps`) gives a leg a video section
   after its audio one. On the forge backend frames are packetized (`forge_rtp::video`), kept for retransmission and
