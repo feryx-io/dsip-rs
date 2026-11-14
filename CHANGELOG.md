@@ -7,6 +7,11 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+- `dsip-messaging`: `client::voicemail_offer` answers the voicemail's `kind` with every offer: `video` only when the
+  attempt offered video (`call_video`) and the callee's entry `accepts` `video`, else `audio` (DSIP spec-gap 184,
+  M§13.2). `dsip-wasm`'s `voicemail_offer` takes an optional `call_video` and reads `accepts` from the entry.
+- DSIP spec: `spec/video-gaps-181-184` (5402a04; spec-gaps 181–184, video codecs and video voicemail).
+
 ## [2026-11-11.2] — workspace release
 
 A phone whose mailbox sends a frame too large for the connection asks for fewer items instead of asking again for the
