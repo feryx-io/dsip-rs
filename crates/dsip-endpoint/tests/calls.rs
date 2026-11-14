@@ -178,7 +178,7 @@ fn starts(s: &Side, sid: &str) -> bool {
 fn an_automatic_answer_carries_sdp_both_ways_and_starts_media_on_the_signed_answer() {
     let (mut a, mut b) = pair(AnswerPolicy::Accept);
     let sid = place(&mut a, &b);
-    assert_eq!(a.media, vec![MediaRequest::Offer { session: sid.clone(), add_source: false }]);
+    assert_eq!(a.media, vec![MediaRequest::Offer { session: sid.clone(), add_source: false, video: false }]);
     assert_eq!(a.sent_of("invite")[0].pointer("/transports/0/sdp").and_then(Value::as_str), Some(sdp("actpass", "sendrecv").as_str()));
     pump(&mut a, &mut b);
     assert!(matches!(&b.media[0], MediaRequest::Answer { session, screening: false, .. } if *session == sid), "{:?}", b.media);
@@ -228,7 +228,7 @@ fn screening_answers_without_sending_then_escalates_with_a_re_offer() {
     assert!(matches!(&b.media[0], MediaRequest::Answer { screening: true, .. }), "{:?}", b.media);
     assert_eq!(b.sent_of("answer")[0]["answered_by"], "screening");
     b.command(CallCommand::Escalate { session: sid.clone() });
-    assert!(b.media.contains(&MediaRequest::Offer { session: sid.clone(), add_source: true }), "{:?}", b.media);
+    assert!(b.media.contains(&MediaRequest::Offer { session: sid.clone(), add_source: true, video: false }), "{:?}", b.media);
     assert_eq!(b.sent_of("update")[0]["answered_by"], "user", "§14.4 step 3");
     pump(&mut a, &mut b);
     let update = b.sent_of("update")[0]["id"].as_str().unwrap().to_string();

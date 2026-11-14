@@ -377,6 +377,13 @@ mod legs {
         screening: bool,
         /// Whether it allocates on a TURN server.
         turn: bool,
+        /// Whether it has a video section.
+        video: bool,
+    }
+
+    /// Whether an SDP offer carries video: an `m=video` section with a port (B§2.1; port 0 is a refused one).
+    fn offers_video(sdp: &str) -> bool {
+        sdp.lines().any(|l| l.strip_prefix("m=video ").is_some_and(|rest| !rest.starts_with("0 ")))
     }
 
     /// The description a leg is asked for.
@@ -425,13 +432,18 @@ mod legs {
             Legs { cfg, turn, turned: None, turn_down_until: 0, legs: HashMap::new(), tx, rx, wake }
         }
 
-        /// Make a leg for `session`, its events forwarded to the phone's task.
-        async fn open(&mut self, session: &str, screening: bool) -> Result<()> {
+        /// Make a leg for `session`, its events forwarded to the phone's task: with a video section only for a call
+        /// whose offer carries video (B§2.1: the SDP matches the descriptors), and only if the phone has video.
+        async fn open(&mut self, session: &str, screening: bool, video: bool) -> Result<()> {
             let Some(cfg) = &self.cfg else { return Ok(()) };
             let mut cfg = cfg.clone();
             if screening {
                 cfg.source = Source::None;
             }
+            if !video || screening {
+                cfg.video = None;
+            }
+            let video = cfg.video.is_some();
             cfg.turn.extend(self.turn_servers().await);
             let turn = !cfg.turn.is_empty();
             let mut leg = MediaLeg::new(cfg).await?;
@@ -445,7 +457,7 @@ mod legs {
                     wake.notify_one();
                 }
             });
-            if let Some(old) = self.legs.insert(session.into(), Leg { leg, screening, turn }) {
+            if let Some(old) = self.legs.insert(session.into(), Leg { leg, screening, turn, video }) {
                 old.leg.close().await;
             }
             Ok(())
@@ -475,7 +487,7 @@ mod legs {
         /// fails, is made again without it, and calls go without TURN for [`Self::TURN_DOWN_S`].
         async fn describe(&mut self, session: &str, what: Describe<'_>) -> Result<String> {
             let Some(l) = self.legs.get(session) else { return Err(crate::Error::Missing("media leg")) };
-            let (turn, screening) = (l.turn, l.screening);
+            let (turn, screening, video) = (l.turn, l.screening, l.video);
             if !turn {
                 return Ok(ask(&l.leg, &what).await?);
             }
@@ -486,16 +498,16 @@ mod legs {
             };
             tracing::warn!("TURN: {why}; calls go without it for {} s", Self::TURN_DOWN_S);
             self.turn_down_until = dsip_transport::now_s() + Self::TURN_DOWN_S;
-            self.open(session, screening).await?;
+            self.open(session, screening, video).await?;
             let l = self.legs.get(session).expect("opened");
             Ok(ask(&l.leg, &what).await?)
         }
 
         pub(super) async fn request(&mut self, agent: &mut Agent, req: MediaRequest) -> Result<()> {
             match req {
-                MediaRequest::Offer { session, add_source } => {
+                MediaRequest::Offer { session, add_source, video } => {
                     if !self.legs.contains_key(&session) {
-                        self.open(&session, false).await?;
+                        self.open(&session, false, video).await?;
                     }
                     let source = self.cfg.as_ref().map(|c| c.source.clone());
                     let Some(l) = self.legs.get_mut(&session) else { return Ok(()) };
@@ -508,7 +520,7 @@ mod legs {
                 }
                 MediaRequest::Answer { session, offer, screening } => {
                     if self.legs.get(&session).is_none_or(|l| screening && !l.screening) {
-                        self.open(&session, screening).await?;
+                        self.open(&session, screening, offers_video(&offer)).await?;
                     }
                     if !self.legs.contains_key(&session) {
                         return Ok(());

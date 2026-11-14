@@ -249,7 +249,7 @@ async fn new_leg(opts: &ConsoleOpts, screening: bool) -> Result<Media> {
 /// §12.12 (remote candidates from signed `info`), §14.1 (send only once told).
 async fn handle_media(agent: &mut Agent, media: &mut Option<Media>, opts: &ConsoleOpts, req: MediaRequest) -> Result<()> {
     match req {
-        MediaRequest::Offer { session, add_source } => {
+        MediaRequest::Offer { session, add_source, .. } => {
             let fresh = media.is_none();
             if fresh {
                 *media = Some(new_leg(opts, false).await?);
