@@ -397,9 +397,10 @@ fn s(v: &Value) -> String {
     v.as_str().unwrap_or("").to_string()
 }
 
-/// Whether the caller's client may offer to record a voicemail after an attempt outcome.
+/// Whether the caller's client may offer to record a voicemail after an attempt outcome, and its `kind`: `video` only
+/// when the attempt offered video (`call_video`) and the callee's entry `accepts` `video`, else `audio`.
 ///
-/// Spec: M§13.2.
+/// Spec: M§13.2 (spec-gap 184).
 pub fn voicemail_offer(inp: &Value) -> Value {
     let vm = &inp["voicemail"];
     if !vm.is_object() || !inp["can_send"].as_bool().unwrap_or(false) {
@@ -418,10 +419,14 @@ pub fn voicemail_offer(inp: &Value) -> Value {
     if !ok {
         return json!({"offer": false});
     }
-    match vm.get("max_duration_s") {
-        Some(d) => json!({"offer": true, "max_duration_s": d}),
-        None => json!({"offer": true}),
+    // M§13.2 (spec-gap 184): video after a video attempt, to a callee whose clients render it (M§4.2 `accepts`)
+    let video = inp["call_video"].as_bool() == Some(true)
+        && inp["accepts"].as_array().is_some_and(|a| a.iter().any(|k| k == "video"));
+    let mut out = json!({"offer": true, "kind": if video { "video" } else { "audio" }});
+    if let Some(d) = vm.get("max_duration_s") {
+        out["max_duration_s"] = d.clone();
     }
+    out
 }
 
 /// Converge duplicate direct conversations on the lowest conversation ULID.

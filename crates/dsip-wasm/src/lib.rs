@@ -801,14 +801,17 @@ pub fn mailbox_select(document: Ts<Json>, hint_endpoints: Ts<Json>) -> Result<Ts
     Ok(Mailbox(out).into_ts()?)
 }
 
-/// Whether the caller may offer to record a voicemail after an attempt ended (M§13.2, the pinned rule):
+/// Whether the caller may offer to record a voicemail after an attempt ended (M§13.2, the pinned rule), and its kind:
 /// `entry_json` the callee's selected `DSIPMailbox` entry, `can_send` from [`messaging::Messenger::can_send`],
-/// `outcome_type` `reject` or `cancel` (our own), `reason` its token.
+/// `outcome_type` `reject` or `cancel` (our own), `reason` its token, `call_video` whether the attempt offered video
+/// (spec-gap 184; absent is false).
 #[wasm_bindgen]
-pub fn voicemail_offer(entry: Ts<Json>, can_send: bool, outcome_type: &str, reason: &str) -> Result<Ts<Voicemail>, JsError> {
+pub fn voicemail_offer(entry: Ts<Json>, can_send: bool, outcome_type: &str, reason: &str, call_video: Option<bool>)
+                       -> Result<Ts<Voicemail>, JsError> {
     let entry = entry.to_rust()?.0;
     let out = dsip_messaging::client::voicemail_offer(&json!({"voicemail": entry["voicemail"], "can_send": can_send,
-        "outcome": {"type": outcome_type, "reason": reason}}));
+        "outcome": {"type": outcome_type, "reason": reason}, "call_video": call_video.unwrap_or(false),
+        "accepts": entry["accepts"]}));
     Ok(Voicemail(out).into_ts()?)
 }
 
