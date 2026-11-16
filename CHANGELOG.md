@@ -7,6 +7,45 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+## [2026-11-15.1] — workspace release
+
+Mailbox admission codes: an operator's mailbox can enrol only the identities it chose, by a code given out of band
+(DSIP spec-gap 185). DSIP spec: `poc-v1.0.8` (was `poc-v1.0.7`).
+
+| Crate | Version |
+|---|---|
+| `dsip-broadcast` | 0.1.1 |
+| `dsip-cli` | 0.3.0 |
+| `dsip-core` | 0.3.0 (was 0.2.0) |
+| `dsip-dht` | 0.2.0 |
+| `dsip-endpoint` | 0.5.0 |
+| `dsip-events` | 0.2.0 |
+| `dsip-gateway` | 0.1.0 |
+| `dsip-kt` | 0.1.0 |
+| `dsip-mailbox` | 0.5.0 (was 0.4.2) |
+| `dsip-media` | 0.2.1 |
+| `dsip-messaging` | 0.7.0 (was 0.6.0) |
+| `dsip-messaging-device` | 0.6.0 |
+| `dsip-messenger` | 0.6.1 |
+| `dsip-mls` | 0.1.0 |
+| `dsip-node` | 0.1.1 |
+| `dsip-number` | 0.1.0 |
+| `dsip-phone` | 0.7.0 |
+| `dsip-push` | 0.1.1 |
+| `dsip-recording` | 0.1.0 |
+| `dsip-relay` | 0.3.1 |
+| `dsip-schema` | 0.3.0 (was 0.2.0) |
+| `dsip-session` | 0.2.0 |
+| `dsip-testkit` | 0.3.0 |
+| `dsip-transport` | 0.11.0 |
+| `dsip-wake` | 0.2.0 |
+| `dsip-wasm` | 0.2.0 |
+| `dsip-webrtc-binding` | 0.1.0 |
+
+**Breaking changes**: `dsip-mailbox`: `MailboxConfig` gains the public field `admission` (#67); a struct literal that
+names every field must add it (`MailboxConfig::new` is unaffected). The spec move registers two reason tokens and the
+`mailbox-config` field `admission`, so `dsip-core` and `dsip-schema` take minor bumps.
+
 ### Added
 
 - Mailbox admission codes (DSIP spec-gap 185, M§4.1): `dsip-mailbox --admission` enrols, within `--serve-any`, only
