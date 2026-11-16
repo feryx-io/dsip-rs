@@ -7,6 +7,50 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+## [2026-11-15] — workspace release
+
+A fix for video calls: after a host's first video call, no later call sent video. DSIP spec: `poc-v1.0.7`,
+unchanged.
+
+| Crate | Version |
+|---|---|
+| `dsip-broadcast` | 0.1.1 |
+| `dsip-cli` | 0.3.0 |
+| `dsip-core` | 0.2.0 |
+| `dsip-dht` | 0.2.0 |
+| `dsip-endpoint` | 0.5.0 |
+| `dsip-events` | 0.2.0 |
+| `dsip-gateway` | 0.1.0 |
+| `dsip-kt` | 0.1.0 |
+| `dsip-mailbox` | 0.4.2 |
+| `dsip-media` | 0.2.1 (was 0.2.0) |
+| `dsip-messaging` | 0.6.0 |
+| `dsip-messaging-device` | 0.6.0 |
+| `dsip-messenger` | 0.6.1 |
+| `dsip-mls` | 0.1.0 |
+| `dsip-node` | 0.1.1 |
+| `dsip-number` | 0.1.0 |
+| `dsip-phone` | 0.7.0 |
+| `dsip-push` | 0.1.1 |
+| `dsip-recording` | 0.1.0 |
+| `dsip-relay` | 0.3.1 |
+| `dsip-schema` | 0.2.0 |
+| `dsip-session` | 0.2.0 |
+| `dsip-testkit` | 0.3.0 |
+| `dsip-transport` | 0.11.0 |
+| `dsip-wake` | 0.2.0 |
+| `dsip-wasm` | 0.2.0 |
+| `dsip-webrtc-binding` | 0.1.0 |
+
+**Breaking changes**: none (a patch).
+
+### Fixed
+
+- `dsip-media`: a video sender ends with its leg (#65). A host makes every leg from one `VideoConfig` (dsip-phone
+  does: one feed from the camera), and the forge backend's sender held the feed for as long as it lived, dropping
+  frames once its leg stopped sending. After the first video call, no call sent video: each side saw its own camera,
+  neither the other's. It now ends when the leg closes or is dropped, and the next leg takes the feed.
+
 ## [2026-11-14] — workspace release
 
 Video in the media leg: a call can carry H.264 or VP8 next to its audio, on the forge backend, with loss repair and
