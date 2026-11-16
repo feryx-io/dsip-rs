@@ -1,8 +1,9 @@
 //! The mailbox's admin commands (`dsip-mailbox admin …`, on the status port): the enrolments against `--serve-any`,
-//! and releasing one.
+//! releasing one, and the admission codes of a mailbox that enrols by code (`--admission`).
 //!
 //! Spec: none (infrastructure). Releasing an enrolment does what M§4.1 says an ended one does (everything held for
-//! the identity deleted, its bindings closed, its place freed): the operator's end of it is spec-gap 164.
+//! the identity deleted, its bindings closed, its place freed): the operator's end of it is spec-gap 164. Admission
+//! codes are given out of band (M§4.1 "Admission codes", spec-gap 185): 128 random bits, base64url, as M§4.1 asks.
 
 use std::collections::BTreeMap;
 
@@ -27,6 +28,27 @@ pub const COMMANDS: &[dsip_transport::admin::Command] = &[
         write: true,
         show: show_released,
     },
+    dsip_transport::admin::Command {
+        name: "admission-new",
+        about: "Issue an admission code for USES enrolments (1 for one person), valid DAYS days if given (--admission)",
+        arg: Some(("spec", "USES[:DAYS]")),
+        write: true,
+        show: show_issued,
+    },
+    dsip_transport::admin::Command {
+        name: "admissions",
+        about: "The admission codes issued, with the uses left and when each expires",
+        arg: None,
+        write: false,
+        show: show_admissions,
+    },
+    dsip_transport::admin::Command {
+        name: "admission-revoke",
+        about: "Withdraw an admission code; enrolments it made stay",
+        arg: Some(("code", "CODE")),
+        write: true,
+        show: show_revoked,
+    },
 ];
 
 /// Answer one admin command.
@@ -47,8 +69,77 @@ pub(super) fn answer(st: &mut Service, command: &str, args: &BTreeMap<String, St
                 "devices_closed": row.as_ref().map(|r| r.devices_bound), "free": free(st)})
         }
         ("release", false) => json!({"error": "release changes state: send it as a POST (dsip-mailbox admin release <did>)"}),
-        _ => json!({"error": format!("no admin command {command:?} (enrolments, release)")}),
+        ("admission-new", true) => {
+            if !st.enrolment.admits_by_code() {
+                return json!({"error": "this mailbox does not enrol by admission code: start it with --admission"});
+            }
+            let Some((uses, days)) = args.get("spec").and_then(|s| parse_spec(s)) else {
+                return json!({"error": "admission-new needs USES[:DAYS], e.g. 1 or 1:30"});
+            };
+            let code = new_code();
+            let expires_at = days.map(|d| now + d * 86_400);
+            st.enrolment.issue_code(&code, uses, expires_at);
+            st.persist();
+            json!({"code": code, "uses": uses, "expires_at": expires_at})
+        }
+        ("admissions", _) => json!({
+            "admission": st.enrolment.admits_by_code(),
+            "codes": st.enrolment.codes().iter().map(|(code, c)| json!({"code": code, "uses": c.uses, "expires_at": c.expires_at,
+                "expired": c.expires_at.is_some_and(|t| now >= t)})).collect::<Vec<_>>(),
+        }),
+        ("admission-revoke", true) => {
+            let Some(code) = args.get("code") else { return json!({"error": "admission-revoke needs code=<code>"}) };
+            if !st.enrolment.revoke_code(code) {
+                return json!({"error": "no such admission code"});
+            }
+            st.persist();
+            json!({"revoked": code})
+        }
+        ("admission-new" | "admission-revoke", false) => json!({"error": format!("{command} changes state: send it as a POST")}),
+        _ => json!({"error": format!("no admin command {command:?} (enrolments, release, admission-new, admissions, admission-revoke)")}),
     }
+}
+
+/// `USES[:DAYS]`: at least one use; days, if given, at least one.
+fn parse_spec(s: &str) -> Option<(u32, Option<i64>)> {
+    let (uses, days) = match s.split_once(':') {
+        Some((u, d)) => (u, Some(d.parse::<i64>().ok().filter(|d| *d > 0)?)),
+        None => (s, None),
+    };
+    Some((uses.parse::<u32>().ok().filter(|u| *u > 0)?, days))
+}
+
+/// A new admission code: 128 random bits, base64url (22 characters).
+fn new_code() -> String {
+    let bytes: [u8; 16] = rand::random();
+    dsip_core::b64::encode(&bytes)
+}
+
+fn show_issued(v: &Value) -> String {
+    let expires = v["expires_at"].as_i64().map_or("does not expire".to_string(), |t| format!("expires at {t} (unix s)"));
+    format!("{}\n{} use(s), {expires}\n", v["code"].as_str().unwrap_or("?"), v["uses"])
+}
+
+fn show_admissions(v: &Value) -> String {
+    let codes = v["codes"].as_array().map_or(&[][..], Vec::as_slice);
+    let mut out = if v["admission"] == json!(true) {
+        format!("enrolment by admission code: {} code(s)\n", codes.len())
+    } else {
+        "enrolment is not by admission code (--admission off)\n".to_string()
+    };
+    for c in codes {
+        let state = if c["expired"] == json!(true) {
+            "expired".to_string()
+        } else {
+            c["expires_at"].as_i64().map_or("no expiry".to_string(), |t| format!("expires at {t}"))
+        };
+        out += &format!("  {}  {} use(s) left, {state}\n", c["code"].as_str().unwrap_or("?"), c["uses"]);
+    }
+    out
+}
+
+fn show_revoked(v: &Value) -> String {
+    format!("revoked {}\n", v["revoked"].as_str().unwrap_or("?"))
 }
 
 fn free(st: &Service) -> Option<usize> {

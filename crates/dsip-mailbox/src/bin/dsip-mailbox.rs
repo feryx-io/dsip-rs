@@ -95,6 +95,11 @@ struct Args {
     /// `--serve-any` is freed. Configured `--owner` identities never expire.
     #[arg(long)]
     release_idle: bool,
+    /// Enrol only identities that present an admission code issued with `dsip-mailbox admin admission-new` (M§4.1
+    /// "Admission codes", spec-gap 185), within `--serve-any`: a hosted mailbox that admits those who signed up, not
+    /// whoever finds it. Its `hello` says `enrolment: "admission"`.
+    #[arg(long, requires = "serve_any")]
+    admission: bool,
     /// Wake sleeping devices through their push gateways (Wake Profile, draft): answer `wake-register`, advertise
     /// `wake` in the mailbox's `hello`, and ask a device's gateway to wake it when an item is stored for its identity
     /// (`message`, at most one a minute per device). Registrations are kept in `<state>/wake-registrations.json`.
@@ -157,6 +162,7 @@ async fn main() -> Result<ExitCode> {
     cfg.handover_wait = args.handover_wait;
     cfg.mls_retention = args.mls_retention;
     cfg.release_idle = args.release_idle;
+    cfg.admission = args.admission;
     cfg.drop_fanout_to = args.drop_fanout_to;
     if args.wake {
         // a gateway's document: the --resolver-file documents, then (unless fetching is off) its did:web document
@@ -183,7 +189,7 @@ async fn main() -> Result<ExitCode> {
     let listener = tokio::net::TcpListener::bind(args.listen).await.with_context(|| format!("binding {}", args.listen))?;
     let server = MailboxServer::open(cfg)?;
     tracing::info!("mailbox {} for {} on wss://{}/dsip (ca {}){}", server.did(), args.owners.join(", "), args.listen, cert.display(),
-        args.serve_any.map(|n| format!(", enrolling up to {n} more (spec-gap 115)")).unwrap_or_default());
+        args.serve_any.map(|n| format!(", enrolling up to {n} more (spec-gap 115){}", if args.admission { " by admission code (spec-gap 185)" } else { "" })).unwrap_or_default());
     if let Some(addr) = args.status_listen {
         server.spawn_status(addr);
     }

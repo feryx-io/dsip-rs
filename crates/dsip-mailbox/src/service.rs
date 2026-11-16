@@ -92,6 +92,11 @@ const SAVE_RETRY_AFTER_S: i64 = 60;
 /// How long a mailbox found through a hint is used before the hint is looked up again, seconds: a member that moves
 /// publishes a newer hint (§8.3), and its deliveries must follow it soon after.
 const HINT_REUSE_S: i64 = 60;
+/// Admission codes a device may have refused within [`ADMISSION_WINDOW_S`] before the rest are refused
+/// `policy.rate-limited` unlooked-at (M§14.3, spec-gap 185). Codes are 128-bit random, so this only bounds the work.
+const ADMISSION_REFUSALS: u32 = 5;
+/// The window of [`ADMISSION_REFUSALS`], seconds.
+const ADMISSION_WINDOW_S: i64 = 600;
 /// Seconds between checks for unacknowledged fan-out.
 const RETRY_TICK_S: u64 = 2;
 /// First and largest delay before re-sending a fan-out head that stays unacknowledged, seconds.
@@ -185,6 +190,8 @@ struct Service {
     drop_fanout_to: Option<String>,
     /// `--release-idle` and `--mls-retention`, as the status page reports them.
     release_idle: bool,
+    /// Refused admission codes per device: when its window began and how many (M§14.3: rate-limited, spec-gap 185).
+    admission_refusals: HashMap<String, (i64, u32)>,
     mls_retention: i64,
     /// Counters for the status page (`--status-listen`).
     stats: status::Stats,
@@ -225,6 +232,7 @@ impl Service {
         let mut parts: Vec<(String, Value)> = vec![
             ("service".into(), json!(self.key.did())),
             ("enrolment".into(), json!(self.enrolment.entries())),
+            ("admission".into(), json!(self.enrolment.codes())),
             ("blob_owners".into(), json!(self.blob_owners)),
             ("drop_box".into(), self.drop_box.full_state()),
             ("fanout".into(), json!(self.fanout.iter().map(|((g, seq), it)| json!([g, seq, it])).collect::<Vec<_>>())),
@@ -355,6 +363,9 @@ impl Service {
                 None => v["enrolled"].as_array().into_iter().flatten().map(|e| (s_of(e), now_s())).collect(),
             };
             self.enrolment.restore_entries(entries);
+            if let Ok(codes) = serde_json::from_value(v["admission"].clone()) {
+                self.enrolment.restore_codes(codes);
+            }
             self.blob_owners = serde_json::from_value(v["blob_owners"].clone()).unwrap_or_default();
             if let Some(d) = Mailbox::from_full_state(&v["drop_box"]) {
                 self.drop_box = d;
@@ -507,8 +518,10 @@ impl Service {
     /// does not serve enrols while the operator's bound has room, as the vector-pinned [`Enrolment`] decides (M§4.1,
     /// spec-gaps 115, 130), and its device is registered. Returns the refusal to send instead of handling the operation
     /// (`mailbox.not-served`), or `None`. A service identity (bound as itself) is not an owner and never enrols; its
-    /// operations go to the drop box as before.
-    fn owner_op(&mut self, identity: &str, device: &str, id: &str, now: i64) -> Option<Vec<Out>> {
+    /// operations go to the drop box as before. `admission` is a `mailbox-config`'s code, where the mailbox enrols by
+    /// code (M§4.1, spec-gap 185); a device refused too many codes is refused `policy.rate-limited` for a while
+    /// without its code being looked at (M§14.3).
+    fn owner_op(&mut self, identity: &str, device: &str, id: &str, admission: Option<&str>, now: i64) -> Option<Vec<Out>> {
         if identity == device {
             return None;
         }
@@ -518,15 +531,41 @@ impl Service {
             self.register(identity, device);
             return None;
         }
-        let emissions = self.enrolment.owner_op(identity, device, id);
+        if admission.is_some() && self.admission_limited(device, now) {
+            tracing::warn!("admission codes from {device} rate-limited (M§14.3)");
+            let refused = vec![json!({"error": {"to": device, "in_reply_to": id, "reason": "policy.rate-limited"}})];
+            return Some(self.mailbox_out(identity, refused, now));
+        }
+        let emissions = self.enrolment.owner_op_admitted(identity, device, id, admission);
         if emissions.iter().any(|e| e.get("enrolled").is_some()) {
             self.ensure_owner(identity);
             self.register(identity, device);
-            tracing::info!("enrolled {identity} (serve-any {}/{})", self.enrolment.entries().len(), self.serve_any.unwrap_or(0));
+            tracing::info!("enrolled {identity} (serve-any {}/{}{})", self.enrolment.entries().len(), self.serve_any.unwrap_or(0),
+                if admission.is_some() && self.enrolment.admits_by_code() { ", by admission code" } else { "" });
             return None;
         }
-        tracing::info!("not serving {identity}: serve-any {}/{} (M§4.1)", self.enrolment.entries().len(), self.serve_any.unwrap_or(0));
+        let reason = emissions.iter().find_map(|e| e["error"]["reason"].as_str()).unwrap_or_default().to_string();
+        if reason == "mailbox.admission-refused" {
+            let r = self.admission_refusals.entry(device.to_string()).or_insert((now, 0));
+            r.1 += 1;
+        }
+        tracing::info!("not serving {identity}: {reason}, serve-any {}/{} (M§4.1)", self.enrolment.entries().len(), self.serve_any.unwrap_or(0));
         Some(self.mailbox_out(identity, emissions, now))
+    }
+
+    /// Whether `device` has had more codes refused than [`ADMISSION_REFUSALS`] within [`ADMISSION_WINDOW_S`] (M§14.3).
+    fn admission_limited(&mut self, device: &str, now: i64) -> bool {
+        self.admission_refusals.retain(|_, (since, _)| now - *since < ADMISSION_WINDOW_S);
+        self.admission_refusals.get(device).is_some_and(|(_, n)| *n >= ADMISSION_REFUSALS)
+    }
+
+    /// How the mailbox's `hello` says identities come to be served (M§4.3 `enrolment`, spec-gap 185).
+    fn enrolment_mode(&self) -> &'static str {
+        match self.serve_any {
+            Some(n) if n > 0 && self.enrolment.admits_by_code() => "admission",
+            Some(n) if n > 0 => "open",
+            _ => "closed",
+        }
     }
 
     /// Register `device` as one of the served `identity`'s devices (M§4.4), if it is not already.
@@ -866,7 +905,7 @@ impl Service {
             let env = wire::error(&self.key, device, now, Some(&id), "transport.routing-refused", Some("wake-register is from the bound device to this mailbox"));
             return vec![env.frame()];
         }
-        if let Some(refused) = self.owner_op(identity, device, &id, now) {
+        if let Some(refused) = self.owner_op(identity, device, &id, None, now) {
             return refused.into_iter().map(|o| match o { Out::Device(_, e) | Out::Identity(_, e) => e.frame() }).collect();
         }
         let did = self.key.did();
@@ -966,6 +1005,9 @@ pub struct MailboxConfig {
     /// End an enrolled identity's enrolment once none of its devices has bound within `mls_retention` (M§4.1;
     /// spec-gap 130).
     pub release_idle: bool,
+    /// Enrol only by an admission code the operator issued (`dsip-mailbox admin admission-new`), within
+    /// [`MailboxConfig::serve_any`] (M§4.1 "Admission codes", spec-gap 185).
+    pub admission: bool,
     /// Fault injection for demos: never deliver hub fan-out to this peer mailbox.
     pub drop_fanout_to: Option<String>,
     /// The advertised `https://…/blobs` (M§4.3; [`blob_endpoint`]).
@@ -995,6 +1037,7 @@ impl MailboxConfig {
             handover_wait: dsip_messaging::mailbox::HANDOVER_WAIT_S,
             mls_retention: dsip_messaging::hub::MLS_RETENTION_S,
             release_idle: false,
+            admission: false,
             drop_fanout_to: None,
             blob_endpoint,
             wake: None,
@@ -1111,8 +1154,14 @@ impl MailboxServer {
             key,
             configured: cfg.owners.clone(),
             serve_any: cfg.serve_any,
-            enrolment: Enrolment::new(&json!({"now": now_s(), "configured": cfg.owners, "serve_any": cfg.serve_any.unwrap_or(0),
-                "expire_idle": cfg.release_idle, "mls_retention_s": cfg.mls_retention})),
+            enrolment: {
+                let mut e = Enrolment::new(&json!({"now": now_s(), "configured": cfg.owners, "serve_any": cfg.serve_any.unwrap_or(0),
+                    "expire_idle": cfg.release_idle, "mls_retention_s": cfg.mls_retention}));
+                if cfg.admission {
+                    e.require_admission();
+                }
+                e
+            },
             blob_owners: BTreeMap::new(),
             owned: BTreeMap::new(),
             drop_box: Mailbox::new(&mailbox_ctx),
@@ -1145,6 +1194,7 @@ impl MailboxServer {
             welcomes_sent: HashMap::new(),
             drop_fanout_to: cfg.drop_fanout_to,
             release_idle: cfg.release_idle,
+            admission_refusals: HashMap::new(),
             mls_retention: cfg.mls_retention,
             stats: status::Stats::new(now_s()),
             wakes: None,
@@ -1171,6 +1221,15 @@ impl MailboxServer {
     /// The service's DID: the `from` of its `hello`.
     pub fn did(&self) -> &str {
         &self.did
+    }
+
+    /// Run an admin command, as `dsip-mailbox admin <command>` does on the status port ([`ADMIN_COMMANDS`]): for a
+    /// program that embeds the mailbox, such as a sign-up service issuing admission codes (`admission-new` with
+    /// `spec` = `USES[:DAYS]`, spec-gap 185). `write` is the command's POST.
+    pub async fn admin(&self, command: &str, args: &[(&str, &str)], write: bool) -> Value {
+        let args = args.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let mut st = self.service.lock().await;
+        admin::answer(&mut st, command, &args, write, now_s())
     }
 
     /// Run the service's clock: re-send unacknowledged fan-out (at once for what was queued before a restart),
@@ -1496,6 +1555,8 @@ async fn serve<S: AsyncRead + AsyncWrite + Unpin>(tls: http::Prefixed<S>, servic
         let id = inb.payload()["id"].as_str().unwrap_or("").to_string();
         let hub = true;
         let mut caps = wire::mailbox_capabilities(hub, &st.blob_endpoint, st.max_blob_bytes);
+        // M§4.3 (spec-gap 185): how an identity not served comes to be
+        caps["mailbox"]["enrolment"] = json!(st.enrolment_mode());
         if st.wakes.is_some() {
             // W§4.4: the profile and the kinds this mailbox sends
             caps["wake"] = json!({"profiles": [dsip_wake::PROFILE], "kinds": WAKE_KINDS});
@@ -1820,7 +1881,7 @@ fn dispatch(
             hub_deposit(st, &p, &device, &identity, item, resolver, now)
         }
         "sync" => {
-            if let Some(refused) = st.owner_op(&identity, &device, &id, now) {
+            if let Some(refused) = st.owner_op(&identity, &device, &id, None, now) {
                 return refused;
             }
             let mut e = json!({"id": id, "device": device, "since": p["since"], "live": p["live"] == json!(true)});
@@ -1836,7 +1897,7 @@ fn dispatch(
             st.mailbox_out(&identity, emissions, now)
         }
         "key-packages" => {
-            if let Some(refused) = st.owner_op(&identity, &device, &id, now) {
+            if let Some(refused) = st.owner_op(&identity, &device, &id, None, now) {
                 return refused;
             }
             let packages: Vec<String> = p["key_packages"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from).collect();
@@ -1874,7 +1935,8 @@ fn dispatch(
                 }
                 return out;
             }
-            if let Some(refused) = st.owner_op(&identity, &device, &id, now) {
+            // M§5.7: the code is only looked at for an identity the mailbox does not serve yet (spec-gap 185)
+            if let Some(refused) = st.owner_op(&identity, &device, &id, p["admission"].as_str(), now) {
                 return refused;
             }
             let mut e = json!({"id": id, "device": device});
