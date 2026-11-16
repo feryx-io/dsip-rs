@@ -86,6 +86,8 @@ pub const REASONS: &[(&str, &[&str])] = &[
     ("mailbox.hub-unreachable", &["error"]), // v0.8 (spec-gap 72): the mailbox could not reach the group's hub (M§9.4)
     ("mailbox.not-served", &["error"]), // v0.16 (spec-gap 130): an owner operation the mailbox will not serve (M§4.1)
     ("mailbox.not-enrolled", &["error"]), // v0.16 (spec-gap 130): a release for a configured identity (M§4.1)
+    ("mailbox.admission-required", &["error"]), // 1.0 (spec-gap 185): no admission code where one is required (M§4.1)
+    ("mailbox.admission-refused", &["error"]), // 1.0 (spec-gap 185): a code not issued, used up or expired (M§4.1)
     ("presence.signer-mismatch", &["error"]), // v0.17 (spec-gap 134): the record's device/subject is not its signer's (P§3)
     ("presence.sealed-invalid", &["error"]), // v0.17 (spec-gaps 152, 157): a sealed record without presence/0.2 or a kid for its audience (P§12.2)
     ("presence.lifetime", &["error"]), // v0.17 (spec-gap 134): a record's lifetime outside 60–3,600 s (P§8)

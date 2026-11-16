@@ -17,6 +17,7 @@ state = "/var/lib/dsip-mailbox"                    # the service key, the self-s
 # owner = ["did:web:example.com"]                  # identities whose documents (or hints) name this mailbox
 # serve_any = 32                                   # up to this many more identities enrol by binding (spec-gap 115)
 # release_idle = false                             # end an enrolment idle for mls_retention (M§4.1; spec-gap 130)
+# admission = false                                # enrol only with a code from `dsip-mailbox admin admission-new` (spec-gap 185)
 # resolver_file = ["/etc/dsip-mailbox/docs/example.com.json"]   # did:web documents, re-read when resolving
 # no_fetch_did_web = false                         # true: never fetch did:web documents, only the files above verify
 # did_web_ttl = 300                                # seconds a fetched did:web document is reused

@@ -19,3 +19,4 @@ status_listen = "127.0.0.1:9102"                   # `dsip-mailbox admin --confi
 # owner = ["did:web:example.com"]
 serve_any = 0                                      # e.g. 32: up to 32 identities enrol by binding (spec-gap 115)
 # release_idle = true                              # end an enrolment idle for mls_retention
+# admission = true                                 # enrol only with a code: `dsip-mailbox admin admission-new 1`

@@ -7,6 +7,16 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+### Added
+
+- Mailbox admission codes (DSIP spec-gap 185, M§4.1): `dsip-mailbox --admission` enrols, within `--serve-any`, only
+  identities whose `mailbox-config` presents a code its operator issued (`dsip-mailbox admin admission-new USES[:DAYS]`,
+  `admissions`, `admission-revoke CODE`; `MailboxServer::admin` for a program that embeds it). A code is spent by the
+  enrolment it makes, and codes survive a restart. The `hello` says `enrolment: "admission"` (or `open`, `closed`).
+  Refusals are `mailbox.admission-required` and `mailbox.admission-refused`, rate-limited per device (`policy.rate-limited`
+  after 5 in 10 minutes). `dsip_messaging::enrolment::Enrolment` gains the codes (`owner_op_admitted`, `issue_code`,
+  `revoke_code`, `codes`), pinned by the `enrolment-admission-*` vectors.
+
 ## [2026-11-15] — workspace release
 
 A fix for video calls: after a host's first video call, no later call sent video. DSIP spec: `poc-v1.0.7`,
