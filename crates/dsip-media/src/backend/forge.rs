@@ -80,6 +80,9 @@ pub struct ForgeLeg {
     tap_in: Option<mpsc::UnboundedSender<Bytes>>,
     tap_out: Option<mpsc::UnboundedSender<Bytes>>,
     video: Option<Arc<Video>>,
+    /// Set when the leg closes; dropped with it. The video sender ends on either, letting go of the host's feed for
+    /// the next leg (a host makes every leg from one [`VideoConfig`]).
+    closed: tokio::sync::watch::Sender<bool>,
 }
 
 impl ForgeLeg {
@@ -132,6 +135,7 @@ impl ForgeLeg {
             bytes_in: Arc::new(AtomicU64::new(0)),
             frames_out: Arc::new(AtomicU64::new(0)),
             sending: Arc::new(AtomicBool::new(false)),
+            closed: tokio::sync::watch::channel(false).0,
             tap_in: cfg.tap_in,
             tap_out: cfg.tap_out,
             video: cfg.video.map(|cfg| {
@@ -282,7 +286,7 @@ impl ForgeLeg {
             return;
         }
         if let Some(v) = self.video.clone().filter(|v| v.cfg.source.is_some()) {
-            tokio::spawn(send_video(v, self.pc.clone(), self.sending.clone()));
+            tokio::spawn(send_video(v, self.pc.clone(), self.sending.clone(), self.closed.subscribe()));
         }
         if self.source == Source::None {
             return;
@@ -327,6 +331,7 @@ impl ForgeLeg {
     /// Stop sending and close the peer connection.
     pub async fn close(&self) {
         self.sending.store(false, Ordering::SeqCst);
+        self.closed.send_replace(true);
         self.pc.lock().await.close();
     }
 }
@@ -337,14 +342,27 @@ async fn video_sender(pc: &Mutex<PeerConnection>) -> Option<VideoSender> {
 }
 
 /// Send the host's frames while the leg is sending (§14.1), keeping each packet for retransmission; frames that come
-/// while it is held are dropped, not queued.
-async fn send_video(v: Arc<Video>, pc: Arc<Mutex<PeerConnection>>, sending: Arc<AtomicBool>) {
+/// while it is held are dropped, not queued. Ends when the leg closes or is dropped (`closed`), so the host's feed
+/// goes to its next leg: holding it on would leave every later call without video.
+async fn send_video(v: Arc<Video>, pc: Arc<Mutex<PeerConnection>>, sending: Arc<AtomicBool>,
+                    mut closed: tokio::sync::watch::Receiver<bool>) {
     let Some(feed) = v.cfg.source.clone() else { return };
-    let mut feed = feed.0.lock().await;
+    let mut feed = tokio::select! {
+        f = feed.0.lock() => f,
+        _ = closed.wait_for(|c| *c) => return,
+    };
     let mut sender: Option<VideoSender> = None;
     // Impl: the first sequence number is taken from the clock, as RFC 3550 §5.1 asks it not be predictable
     let mut seq = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos() as u16);
-    while let Some(frame) = feed.recv().await {
+    loop {
+        let frame = tokio::select! {
+            f = feed.recv() => match f {
+                Some(f) => f,
+                None => break,
+            },
+            // closed, or the leg dropped
+            _ = closed.wait_for(|c| *c) => break,
+        };
         if !sending.load(Ordering::SeqCst) {
             continue;
         }

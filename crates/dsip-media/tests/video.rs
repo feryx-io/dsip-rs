@@ -104,6 +104,48 @@ async fn frames_cross_whole_both_ways() {
     b.leg.close().await;
 }
 
+/// A host makes every call's leg from one video config, as dsip-phone does: one feed from its camera. A call over,
+/// closed or just dropped, lets go of the feed, and the next call carries the camera's frames.
+#[tokio::test]
+async fn the_next_call_gets_the_camera() {
+    if !init() {
+        return;
+    }
+    let (frames, feed) = VideoFeed::channel();
+    let leg = |feed: VideoFeed| async move {
+        MediaLeg::new(MediaConfig {
+            source: Source::Tone { hz: 440.0 },
+            backend: Backend::Forge,
+            video: Some(VideoConfig { source: Some(feed), ..VideoConfig::default() }),
+            ..MediaConfig::default()
+        })
+        .await
+        .unwrap()
+    };
+    // the first call closed, the second dropped without closing, the third must still send
+    for (call, ends) in ["closed", "dropped", "last"].into_iter().enumerate() {
+        let mut a = Side { leg: leg(feed.clone()).await, frames: frames.clone(), received: mpsc::unbounded_channel().1 };
+        let mut b = side(true).await;
+        connect(&mut a, &mut b).await;
+        for n in 0..30u32 {
+            frames.send(VideoFrame { data: h264(n, n == 0, 1_000), keyframe: n == 0, timestamp: n * 3_000 }).unwrap();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let mut got = 0;
+        while b.received.try_recv().is_ok() {
+            got += 1;
+        }
+        assert_eq!(got, 30, "call {}: {got} of 30 frames", call + 1);
+        match ends {
+            "dropped" => drop(a),
+            _ => a.leg.close().await,
+        }
+        b.leg.close().await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 #[tokio::test]
 async fn an_audio_only_answerer_refuses_video_and_the_call_goes_on() {
     if !init() {
