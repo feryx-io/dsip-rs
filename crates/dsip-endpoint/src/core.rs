@@ -338,6 +338,8 @@ pub struct Core {
     invite_patch: Option<InvitePatch>,
     /// `identity.claims` to put on the next invite (a gateway's PSTN caller claim, §18.1).
     pending_claims: Vec<Value>,
+    /// The profile card the grant being issued carries (§19.4, `profile-card/1.0`), taken when it is built.
+    pending_profile: Option<Value>,
     pending_info_data: Option<Value>,
     counter: u64,
     /// Frames waiting for documents ([`CoreConfig::resolve_on_demand`]).
@@ -406,6 +408,7 @@ impl Core {
             recording: None,
             invite_patch: None,
             pending_claims: vec![],
+            pending_profile: None,
             pending_info_data: None,
             counter: 0,
             held: vec![],
@@ -805,9 +808,24 @@ impl Core {
     #[allow(clippy::too_many_arguments)]
     pub fn grant_request(&mut self, introduction: &str, requester: &str, id: String, scope: Vec<String>, valid_until: i64,
                          presence_audience: Option<String>, now: i64) -> Result<(Option<String>, Vec<CoreEvent>)> {
+        self.grant_request_with_card(introduction, requester, id, scope, valid_until, presence_audience, None, now)
+    }
+
+    /// As [`Core::grant_request`], the grant carrying this identity's profile card sealed to the requester when
+    /// `card` is given (§19.4, `profile-card/1.0`). The host gives one only by its user's standing choice and only
+    /// when the introduction listed the extension. Impl: without the requester's key agreement key, or with a card a
+    /// receiver would not take, the grant goes without it.
+    ///
+    /// Spec: §19.4.
+    #[allow(clippy::too_many_arguments)]
+    pub fn grant_request_with_card(&mut self, introduction: &str, requester: &str, id: String, scope: Vec<String>, valid_until: i64,
+                                   presence_audience: Option<String>, card: Option<Value>, now: i64) -> Result<(Option<String>, Vec<CoreEvent>)> {
         self.ep.contacts.requests.insert(introduction.to_string(), (requester.to_string(), requester.to_string()));
         let ev = LocalEvent::Grant { introduction: introduction.to_string(), id, scope, valid_until, presence_audience };
-        let out = self.local(ev, now)?;
+        self.pending_profile = card.filter(|c| dsip_core::profile_card::take_card(c).is_some());
+        let out = self.local(ev, now);
+        self.pending_profile = None;
+        let out = out?;
         self.ep.contacts.requests.remove(introduction); // refused: no request is left behind
         let mut grant = None;
         let rest = out
@@ -1273,6 +1291,12 @@ impl Core {
                     let pk = p["to"].as_str().and_then(|to| self.key_agreement_of(to, now));
                     if let (Some(keys), Some(pk)) = (keys, pk) {
                         p["presence_keys"] = presence_seal::seal_grant_keys(&p, &keys, &pk, &rand::random());
+                    }
+                }
+                // §19.4 (profile-card/1.0): the card the host gave for this grant, sealed to the grantee identity
+                if let Some(card) = self.pending_profile.take() {
+                    if let Some(pk) = p["to"].as_str().and_then(|to| self.key_agreement_of(to, now)) {
+                        dsip_core::profile_card::seal_grant_profile(&mut p, &card, &pk, &rand::random());
                     }
                 }
             }

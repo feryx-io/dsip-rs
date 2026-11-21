@@ -141,6 +141,9 @@ pub struct GrantRequest {
     pub scope: Vec<String>,
     /// Until when (Unix seconds).
     pub valid_until: i64,
+    /// Our profile card for the grant to carry, sealed to the requester (§19.4, `profile-card/1.0`). Give one only by
+    /// the user's standing choice and only when the introduction listed the extension; `None` sends none.
+    pub profile: Option<serde_json::Value>,
 }
 
 /// A grant the phone issued that the host delivers: one following a grant it issued earlier, with new presence keys

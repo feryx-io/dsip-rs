@@ -158,7 +158,7 @@ impl Runner {
             Cmd::Unwatch(target) => self.presence.unwatch(&mut self.agent, &target),
             Cmd::Grant { request, reply } => {
                 let r = request;
-                let granted = self.agent.grant_request(&r.introduction, &r.requester, r.scope, r.valid_until, None).await;
+                let granted = self.agent.grant_request_with_card(&r.introduction, &r.requester, r.scope, r.valid_until, None, r.profile).await;
                 let _ = reply.send(granted.map_err(Into::into));
             }
             Cmd::HoldGrant { grant, reply } => {

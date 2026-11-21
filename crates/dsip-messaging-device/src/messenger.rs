@@ -2780,6 +2780,23 @@ impl<S: Store> Messenger<S> {
     /// in `target`'s document (M§6.9) unless `plain`: the compact envelope the host deposits at `target`'s mailbox ([`Messenger::first_contact_frame`]), and the `mailbox-config` that tells this identity's own
     /// mailbox first, so the grant that answers it is not rate-limited there (spec-gap 81).
     pub fn introduce(&mut self, target: &str, purpose: &str, plain: bool, now: f64) -> Result<Introduction, Error> {
+        self.introduce_with_card(target, purpose, plain, None, now)
+    }
+
+    /// As [`Messenger::introduce`], with this identity's profile card sealed beside the purpose (§19.4,
+    /// `profile-card/1.0`) when `card` is given. The host gives one only by its user's standing choice and only for a
+    /// `target` known to support the extension (`dsip_messaging::first_contact::profile_card_send`), and hands the
+    /// envelope only to a mailbox whose `hello` takes its size. A sealed introduction lists the extension with or
+    /// without a card, so the grant answering it may carry the grantor's. A card cannot go `plain`.
+    ///
+    /// Spec: §19.4, M§14.1.
+    pub fn introduce_with_card(&mut self, target: &str, purpose: &str, plain: bool, card: Option<&Value>, now: f64) -> Result<Introduction, Error> {
+        if plain && card.is_some() {
+            return Err(Error::from("a profile card is sealed: it cannot go on a plain introduction".to_string()));
+        }
+        if card.is_some_and(|c| dsip_core::profile_card::take_card(c).is_none()) {
+            return Err(Error::from("the profile card is not one a receiver would take (§19.4)".to_string()));
+        }
         let now = now as i64;
         let mut p = json!({"dsip": wire::version_block(), "type": "introduction", "id": wire::new_id(now), "from": self.keys.identity,
             "to": target, "identity": {"display_name": self.keys.display_name}, "purpose": purpose, "issued_at": now,
@@ -2795,10 +2812,20 @@ impl<S: Store> Messenger<S> {
             let pk = pk.ok_or_else(|| Error::from(format!("{target} publishes no key agreement key: introduce it plain")))?;
             let mut sk_e = [0u8; 32];
             sk_e.copy_from_slice(&KeyPair::generate().seed());
-            dsip_messaging::first_contact::seal_introduction(&mut p, purpose, &pk, &sk_e);
+            match card {
+                Some(card) => dsip_messaging::first_contact::seal_introduction_with_card(&mut p, purpose, card, &pk, &sk_e),
+                None => {
+                    // §19.4: an introducer that supports the extension lists it on every introduction
+                    dsip_core::profile_card::list_profile_card(&mut p);
+                    dsip_messaging::first_contact::seal_introduction(&mut p, purpose, &pk, &sk_e);
+                }
+            }
         }
         let id = s_of(&p["id"]);
         let envelope = compact(&self.sign_delegated(&p));
+        if envelope.len() > dsip_core::profile_card::introduction_cap(&p) {
+            return Err(Error::from(format!("the introduction is {} bytes, over its cap (§19.4)", envelope.len())));
+        }
         let notice = self.config_env(json!({"subject": self.keys.identity, "introductions_sent": [id]}), now);
         Ok(Introduction { id, envelope, send: notice.frame() })
     }
@@ -2991,14 +3018,20 @@ impl<S: Store> Messenger<S> {
                 if let Some(identity) = req.payload.get("identity") {
                     kept["identity"] = identity.clone();
                 }
+                if let Some(card) = &req.profile {
+                    kept["profile"] = card.clone();
+                }
+                kept["profile_cards"] = json!(req.profile_cards);
                 self.requests.insert(req.id.clone(), kept);
                 // M§6.9: a sealed purpose never travels in the clear
                 let on_wire = req.payload.get("purpose").is_some();
-                return vec![Ui::Request { id: req.id, from: req.from, purpose, sealed: req.sealed, purpose_on_wire: on_wire }.into()];
+                return vec![Ui::Request { id: req.id, from: req.from, purpose, sealed: req.sealed, purpose_on_wire: on_wire,
+                                          profile: req.profile, profile_cards: req.profile_cards }.into()];
             }
             first_contact::Received::Grant(g) => {
                 self.grants_held.insert(g.from.clone(), g.envelope);
-                return vec![Ui::Granted { by: g.from, scope: g.scope, request: g.request }.into()];
+                return vec![Ui::Granted { by: g.from, scope: g.scope, request: g.request, profile: g.profile,
+                                          profile_sent: g.profile_sent, profile_cards: g.profile_cards }.into()];
             }
             first_contact::Received::DoesNotVerify => format!("{} {}: does not verify", s_of(&item["class"]), item["cursor"]),
             first_contact::Received::BadIntroduction { id, code, .. } => format!("introduction {id}: {code}"),

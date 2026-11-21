@@ -759,10 +759,10 @@ impl Console {
             Ui::Activity { from, activity, state, .. } => println!("ACTIVITY {} {} {}", s(from), s(activity), s(state)),
             Ui::ActivityCleared { from, activity, .. } => println!("ACTIVITY-CLEARED {from} {activity}"),
             Ui::ActivitySent { activity, state, .. } => println!("SENT-ACTIVITY {activity} {state}"),
-            Ui::Request { id, from, purpose, sealed, purpose_on_wire } => {
+            Ui::Request { id, from, purpose, sealed, purpose_on_wire, .. } => {
                 println!("REQUEST {id} from {from}: \"{purpose}\" sealed={sealed} purpose_on_wire={purpose_on_wire}")
             }
-            Ui::Granted { by, scope, request } => println!("GRANTED by {by} scope={scope} request={request}"),
+            Ui::Granted { by, scope, request, .. } => println!("GRANTED by {by} scope={scope} request={request}"),
             Ui::Recording { group, new, ended, .. } => self.recording(group, new, *ended),
             Ui::RecordingAccepted { conversation, recorders, from_device } => {
                 let target = self.names.iter().find(|(_, (c, _))| c == conversation).map(|(g, _)| g.clone()).unwrap_or_default();

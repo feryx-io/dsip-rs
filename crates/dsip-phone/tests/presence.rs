@@ -42,10 +42,37 @@ async fn grant(grantor: &Phone, grantee: &Phone) {
         introduction: dsip_core::ulid::Ulid::generate().to_string(),
         requester: grantee.identity().into(),
         scope: vec!["dsip.invite".into(), "dsip.message".into(), "dsip.subscribe".into()],
-        valid_until: dsip_transport::now_s() + 86_400,
+        valid_until: dsip_transport::now_s() + 86_400, profile: None,
     };
     let frame = grantor.grant_request(request).await.unwrap().expect("a grant");
     assert!(grantee.hold_grant(&frame).await.unwrap(), "the grantee holds it");
+}
+
+#[tokio::test]
+async fn a_grant_carries_the_profile_card_the_host_gave() {
+    // §19.4 (profile-card/1.0): sealed to the requester, the extension listed; without a card neither is there
+    let net = Network::new();
+    let alice = phone(&net, "Alice").await;
+    let bob = phone(&net, "Bob").await;
+    let issue = |profile: Option<serde_json::Value>| GrantRequest {
+        introduction: dsip_core::ulid::Ulid::generate().to_string(),
+        requester: alice.identity().into(),
+        scope: vec!["dsip.message".into()],
+        valid_until: dsip_transport::now_s() + 3600,
+        profile,
+    };
+    let payload = |compact: String| -> serde_json::Value {
+        let part = compact.split('.').nth(1).expect("compact").to_string();
+        serde_json::from_slice(&dsip_core::b64::decode(&part).expect("base64url")).expect("json")
+    };
+    let carded = payload(bob.grant_request(issue(Some(serde_json::json!({"display_name": "Bob"})))).await.unwrap().expect("a grant"));
+    assert_eq!(carded["profile"]["alg"], "hpke-base-x25519-sha256-aes128gcm", "{carded}");
+    assert!(dsip_core::profile_card::lists_profile_card(&carded), "{carded}");
+    let bare = payload(bob.grant_request(issue(None)).await.unwrap().expect("a grant"));
+    assert!(bare.get("profile").is_none() && !dsip_core::profile_card::lists_profile_card(&bare), "{bare}");
+    // a card a receiver would not take is not sent
+    let bad = payload(bob.grant_request(issue(Some(serde_json::json!({"display_name": ""})))).await.unwrap().expect("a grant"));
+    assert!(bad.get("profile").is_none(), "{bad}");
 }
 
 #[tokio::test]
@@ -94,7 +121,7 @@ async fn a_grant_is_held_only_by_its_grantee() {
         introduction: dsip_core::ulid::Ulid::generate().to_string(),
         requester: alice.identity().into(),
         scope: vec!["dsip.subscribe".into()],
-        valid_until: dsip_transport::now_s() + 60,
+        valid_until: dsip_transport::now_s() + 60, profile: None,
     };
     let frame = bob.grant_request(request).await.unwrap().expect("a grant");
     assert!(!carol.hold_grant(&frame).await.unwrap(), "addressed to Alice");
@@ -187,7 +214,7 @@ async fn the_relay_carries_a_sealed_record_it_cannot_read() {
         introduction: dsip_core::ulid::Ulid::generate().to_string(),
         requester: dave.identity(),
         scope: vec!["dsip.subscribe".into()],
-        valid_until: dsip_transport::now_s() + 3600,
+        valid_until: dsip_transport::now_s() + 3600, profile: None,
     };
     let frame = bob.grant_request(request).await.unwrap().expect("a grant");
     assert!(dave.agent.hold_grant(&frame).await.unwrap());
