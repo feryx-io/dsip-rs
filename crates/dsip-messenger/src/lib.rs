@@ -17,7 +17,8 @@
 //!
 //! M§4.2 discovery of another identity's mailbox, in §8.1's order: the DID document files, then the identity's
 //! `did:web` document fetched ([`Messenger::with_did_web`]), then, for an identity with no document, its reachability
-//! hint on the hints nodes ([`Messenger::with_hints`]); a hint is reused for [`HINT_REUSE_S`] at most.
+//! hint on the hints nodes ([`Messenger::with_hints`]); a hint is reused for [`HINT_REUSE_S`] at most. What an identity
+//! says it supports is read in the same order ([`Messenger::peer_lists`], core §19.4).
 //!
 //! Impl: the state is written under the engine's keys (`messenger`, and `resume`, which the item transactions write
 //! too, spec-gap 44) and one key of the host's ([`Config::host_key`]): the blob fetches still to retry, beside what
@@ -243,8 +244,8 @@ pub struct Messenger<S: Store> {
     web: Option<Arc<dsip_transport::resolver::WebDocuments>>,
     /// The hints tier, for identities with no document (M§4.2, §8.1 rule 6).
     hints: Option<dsip_transport::hints::HintsClient>,
-    /// Mailboxes found through hints: `(DID, URI, reuse until)`.
-    hinted: HashMap<String, (String, String, i64)>,
+    /// Mailboxes found through hints: `(DID, URI, reuse until, the extensions the hint listed)`.
+    hinted: HashMap<String, (String, String, i64, Vec<String>)>,
 }
 
 /// The documents in `files` (each a DID document as JSON; unreadable ones are skipped).
@@ -391,23 +392,13 @@ impl<S: Store> Messenger<S> {
     /// `did:web`), else from its hint; a document's entries are never passed over for a hint (§8.1 rule 6).
     pub async fn discover_mailbox(&mut self, identity: &str) -> Result<(String, String)> {
         let files = resolver(&self.cfg.resolver_files);
-        let mut doc = dsip_core::did::Resolver::resolve(&files, identity);
-        if doc.is_none() && identity.starts_with("did:web:") {
-            if let Some(web) = &self.web {
-                web.fetch(&[identity.to_string()]).await;
-                doc = web.held(identity);
-                if let Some(d) = &doc {
-                    self.m.add_document(d.clone()); // §7.4: its delegations verify against it
-                }
-            }
-        }
-        if let Some(d) = doc {
+        if let Some(d) = self.document_of(identity).await {
             let mut r = StaticResolver::default();
             r.insert(d);
             return mailbox_of(identity, &r);
         }
         let now = now_s();
-        if let Some((did, uri, until)) = self.hinted.get(identity) {
+        if let Some((did, uri, until, _)) = self.hinted.get(identity) {
             if *until > now {
                 return Ok((did.clone(), uri.clone()));
             }
@@ -426,8 +417,41 @@ impl<S: Store> Messenger<S> {
         let uri = entries.iter().find(|e| e["mailbox"] == json!(did)).and_then(|e| e["uri"].as_str())
             .ok_or_else(|| Error::NoMailbox(format!("{identity}'s hinted mailbox has no uri")))?
             .to_string();
-        self.hinted.insert(identity.to_string(), (did.clone(), uri.clone(), hint.expires_at.min(now + HINT_REUSE_S)));
+        self.hinted.insert(identity.to_string(), (did.clone(), uri.clone(), hint.expires_at.min(now + HINT_REUSE_S), hint.extensions.clone()));
         Ok((did, uri))
+    }
+
+    /// `identity`'s DID document: from the files, else, a `did:web`'s, fetched (§7.2) and held by the engine.
+    async fn document_of(&mut self, identity: &str) -> Option<dsip_core::did::DidDocument> {
+        let files = resolver(&self.cfg.resolver_files);
+        let mut doc = dsip_core::did::Resolver::resolve(&files, identity);
+        if doc.is_none() && identity.starts_with("did:web:") {
+            if let Some(web) = &self.web {
+                web.fetch(&[identity.to_string()]).await;
+                doc = web.held(identity);
+                if let Some(d) = &doc {
+                    self.m.add_document(d.clone()); // §7.4: its delegations verify against it
+                }
+            }
+        }
+        doc
+    }
+
+    /// Whether `identity` says it supports `extension`, in §8.1's order: its DID document's `dsipExtensions`, or, for
+    /// an identity with no document, its verified, unexpired reachability hint's own `dsip.extensions` (the hint
+    /// [`Messenger::discover_mailbox`] finds its mailbox in). A host asks before it sends what only a supporting
+    /// identity is sent: a profile card on an introduction (`profile-card/1.0`).
+    ///
+    /// Spec: §19.4 (spec-gap 189), §8.1.
+    pub async fn peer_lists(&mut self, identity: &str, extension: &str) -> bool {
+        if let Some(d) = self.document_of(identity).await {
+            return d.dsip_extensions.iter().any(|e| e == extension);
+        }
+        if self.discover_mailbox(identity).await.is_err() {
+            return false;
+        }
+        let now = now_s();
+        self.hinted.get(identity).is_some_and(|(_, _, until, listed)| *until > now && listed.iter().any(|e| e == extension))
     }
 
     /// The engine.

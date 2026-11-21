@@ -18,6 +18,10 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
   `Ui::Request`/`Ui::Granted` (`profile`, `profile_cards`, `profile_sent`). `dsip_core::profile_card` gains
   `seal_grant_profile`, `open_grant_profile`, `list_profile_card`. **Breaking:** `dsip_phone::GrantRequest`,
   `first_contact::Request` and `first_contact::Grant` have new fields, and the two `Ui` variants have new members.
+- What an identity says it supports (DSIP spec-gap 189). `dsip_transport::hints::reachability_listing` lists
+  extensions in a hint's own `dsip.extensions`; a verified `dsip_dht::record::Hint` carries them (`extensions`);
+  `DidDocument` reads `dsipExtensions`; `dsip_messenger::Messenger::peer_lists` answers from the document, else
+  from the hint. **Breaking:** `Hint` and `DidDocument` have a new field.
 
 ## [2026-11-15.1] — workspace release
 
