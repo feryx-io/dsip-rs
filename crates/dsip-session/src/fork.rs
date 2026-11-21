@@ -556,14 +556,15 @@ impl Relay {
         let now = self.now;
         let att = self.attempts.get_mut(&sid).expect("checked");
         if m.msg_type == "cancel" && m.from == att.initiator {
-            att.last = now;
             // §12.7 rule 3: per-leg cancel to every leg that has not terminated — or, addressed to a device, to
             // that leg alone (§12.11: "a specific device DID (targeted cancel of one leg)")
             let only = m.to.clone().filter(|to| att.legs.contains_key(to));
             if only.is_none() && m.to.as_ref().is_some_and(|to| *to != att.identity) {
-                // addressed to a device that is no leg of this attempt: not the attempt's business
+                // addressed to a device that is no leg of this attempt: not the attempt's business, and so not a
+                // message that keeps it held (§13.3, spec-gap 187)
                 return self.route_plain(m);
             }
+            att.last = now;
             let live: Vec<String> = att
                 .legs
                 .iter()
