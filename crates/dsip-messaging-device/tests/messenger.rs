@@ -236,6 +236,22 @@ fn first_contact_and_any_object_sent() {
     let got = dsip_messaging_device::first_contact::received(&item, &bob.did(), &dsip_core::envelope::Context::new(NOW, &resolver), NOW, Some(&bob.seed()));
     assert!(matches!(got, dsip_messaging_device::first_contact::Received::Request(ref r) if r.purpose.as_deref() == Some("lunch?")), "{got:?}");
 
+    // §19.4 (profile-card/1.0): a sealed introduction lists the extension, card or not; this one carried none
+    assert!(matches!(got, dsip_messaging_device::first_contact::Received::Request(ref r) if r.profile.is_none() && r.profile_cards), "{got:?}");
+    // with a card, bob reads it beside the purpose, as alice's own claim
+    let card = json!({"display_name": "Alice", "picture": {"content_type": "image/png", "data": "iVBORw0KGgo"}});
+    let carded = m.introduce_with_card(&bob.did(), "lunch?", false, Some(&card), NOW as f64 + 1.0).unwrap();
+    let item = json!({"cursor": "c2", "class": "introduction", "envelope": carded.envelope});
+    let got = dsip_messaging_device::first_contact::received(&item, &bob.did(), &dsip_core::envelope::Context::new(NOW, &resolver), NOW, Some(&bob.seed()));
+    assert!(matches!(got, dsip_messaging_device::first_contact::Received::Request(ref r)
+        if r.purpose.as_deref() == Some("lunch?") && r.profile.as_ref() == Some(&card) && r.profile_cards), "{got:?}");
+    // a device that cannot open the seal sees no card
+    let got = dsip_messaging_device::first_contact::received(&item, &bob.did(), &dsip_core::envelope::Context::new(NOW, &resolver), NOW, None);
+    assert!(matches!(got, dsip_messaging_device::first_contact::Received::Request(ref r) if r.profile.is_none() && r.purpose.is_none()), "{got:?}");
+    // a card is sealed or not sent: never on a plain introduction, and never one a receiver would not take
+    assert!(m.introduce_with_card(&bob.did(), "lunch?", true, Some(&card), NOW as f64).is_err());
+    assert!(m.introduce_with_card(&bob.did(), "lunch?", false, Some(&json!({"display_name": ""})), NOW as f64).is_err());
+
     // a grant, and the release that is not kept pending (it would release the next binding too)
     let grant = m.grant(&bob.did(), None, NOW as f64);
     assert_eq!(grant.split('.').count(), 3);

@@ -1,12 +1,13 @@
 //! Profile cards: the extension `profile-card/1.0`. A card is the name and small picture an identity asks to be shown
 //! as, sealed to the other party on an `introduction` (in the sealed plaintext, beside `purpose`) or on a `grant`
-//! (member `profile`). Here: the card's own rules and the introduction cap the extension raises. Sealing and
-//! opening are `dsip-messaging`'s (`first_contact`).
+//! (member `profile`). Here: the card's own rules, the introduction cap the extension raises, and a grant's card
+//! sealed and opened. An introduction's card is sealed with its purpose, in `dsip-messaging` (`first_contact`).
 //!
 //! Spec: §19.4 (Profile cards), §18.2.
 
 use serde_json::{json, Map, Value};
 
+use crate::hpke::{hpke_open, hpke_seal};
 use crate::INTRODUCTION_MAX_BYTES;
 
 /// The extension's id, as listed in `dsip.extensions`.
@@ -102,4 +103,101 @@ pub fn take_card(card: &Value) -> Option<Value> {
         out.insert("picture".into(), json!({"content_type": content_type, "data": data}));
     }
     Some(Value::Object(out))
+}
+
+/// The sealing algorithm of a card, the sealed purpose's.
+///
+/// Spec: §19.4, M§6.9.
+pub const CARD_SEALED_ALG: &str = "hpke-base-x25519-sha256-aes128gcm";
+
+/// HPKE `info` for a grant's profile card.
+///
+/// Spec: §19.4.
+pub const PROFILE_INFO: &[u8] = b"dsip profile card v1";
+
+/// Why a grant's card is ignored; the grant stands either way. The text of each is the vectors' code.
+///
+/// Spec: §19.4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardIgnored {
+    /// The grant carries `profile` and does not list `profile-card/1.0`.
+    ExtensionUnlisted,
+    /// `profile.alg` is not the one algorithm of 1.0.
+    AlgUnsupported,
+    /// `enc` or `ct` is not base64url, or HPKE does not open.
+    OpenFailed,
+    /// The plaintext is not a §10.3 JSON object of exactly `profile`.
+    PlaintextInvalid,
+    /// The card fails its own rules ([`take_card`]).
+    CardInvalid,
+}
+
+impl CardIgnored {
+    /// The code the conformance vectors name it by.
+    pub fn code(self) -> &'static str {
+        match self {
+            CardIgnored::ExtensionUnlisted => "profile-extension-unlisted",
+            CardIgnored::AlgUnsupported => "sealed-alg-unsupported",
+            CardIgnored::OpenFailed => "sealed-open-failed",
+            CardIgnored::PlaintextInvalid => "sealed-plaintext-invalid",
+            CardIgnored::CardInvalid => "profile-card-invalid",
+        }
+    }
+}
+
+/// The AAD that binds a card to its grant: `id ‖ 0x00 ‖ from ‖ 0x00 ‖ to`.
+///
+/// Spec: §19.4.
+fn grant_aad(g: &Value) -> Vec<u8> {
+    let s = |k: &str| g[k].as_str().unwrap_or("").as_bytes().to_vec();
+    [s("id"), vec![0], s("from"), vec![0], s("to")].concat()
+}
+
+/// Add `profile-card/1.0` to a payload's `dsip.extensions`, once.
+///
+/// Spec: §19.4.
+pub fn list_profile_card(p: &mut Value) {
+    if lists_profile_card(p) {
+        return;
+    }
+    match p["dsip"]["extensions"].as_array_mut() {
+        Some(exts) => exts.push(json!(PROFILE_CARD_EXT)),
+        None => p["dsip"]["extensions"] = json!([PROFILE_CARD_EXT]),
+    }
+}
+
+/// Seal the grantor's `card` into a grant payload as `profile`, for the grantee identity's X25519 key, and list
+/// `profile-card/1.0`. Only for a grantee known to support the extension. The grant's `id`, `from` and `to` must be
+/// final: they bind the card.
+///
+/// Spec: §19.4.
+pub fn seal_grant_profile(g: &mut Value, card: &Value, pk_r: &[u8; 32], sk_e: &[u8; 32]) {
+    list_profile_card(g);
+    let pt = serde_json::to_vec(&json!({"profile": card})).expect("json");
+    let (enc, ct) = hpke_seal(pk_r, PROFILE_INFO, &grant_aad(g), &pt, sk_e);
+    g["profile"] = json!({"alg": CARD_SEALED_ALG, "enc": crate::b64::encode(&enc), "ct": crate::b64::encode(&ct)});
+}
+
+/// The card a grant's `profile` carries, opened with the grantee's X25519 key agreement secret: the card as taken,
+/// `None` for a grant without `profile`, or why it is ignored.
+///
+/// Spec: §19.4.
+pub fn open_grant_profile(g: &Value, sk: &[u8; 32]) -> Result<Option<Value>, CardIgnored> {
+    let Some(sealed) = g.get("profile") else { return Ok(None) };
+    if !lists_profile_card(g) {
+        return Err(CardIgnored::ExtensionUnlisted);
+    }
+    if sealed["alg"] != CARD_SEALED_ALG {
+        return Err(CardIgnored::AlgUnsupported);
+    }
+    let d = |k: &str| sealed[k].as_str().and_then(crate::b64::decode).unwrap_or_default();
+    let pt = hpke_open(&d("enc"), sk, PROFILE_INFO, &grant_aad(g), &d("ct")).ok_or(CardIgnored::OpenFailed)?;
+    // §10.3: UTF-8, a JSON object, no floats
+    let Ok(Value::Object(body)) = crate::wire::parse_payload(&pt, false) else {
+        return Err(CardIgnored::PlaintextInvalid);
+    };
+    let (1, Some(card)) = (body.len(), body.get("profile")) else {
+        return Err(CardIgnored::PlaintextInvalid);
+    };
+    take_card(card).map(Some).ok_or(CardIgnored::CardInvalid)
 }

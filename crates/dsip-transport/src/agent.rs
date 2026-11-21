@@ -327,8 +327,15 @@ impl Agent {
     /// refused it. Spec: §19.4, M§14.1, P§6.
     pub async fn grant_request(&mut self, introduction: &str, requester: &str, scope: Vec<String>, valid_until: i64,
                                presence_audience: Option<String>) -> Result<Option<String>> {
+        self.grant_request_with_card(introduction, requester, scope, valid_until, presence_audience, None).await
+    }
+
+    /// As [`Agent::grant_request`], the grant carrying our profile card sealed to the requester when `card` is given
+    /// ([`Core::grant_request_with_card`]). Spec: §19.4 (`profile-card/1.0`).
+    pub async fn grant_request_with_card(&mut self, introduction: &str, requester: &str, scope: Vec<String>, valid_until: i64,
+                                         presence_audience: Option<String>, card: Option<serde_json::Value>) -> Result<Option<String>> {
         let id = self.core.new_id(now_s());
-        let (grant, rest) = self.core.grant_request(introduction, requester, id, scope, valid_until, presence_audience, now_s())?;
+        let (grant, rest) = self.core.grant_request_with_card(introduction, requester, id, scope, valid_until, presence_audience, card, now_s())?;
         self.dispatch(rest).await?;
         self.save_contacts()?;
         Ok(grant)

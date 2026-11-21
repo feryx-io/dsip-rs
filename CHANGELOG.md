@@ -12,6 +12,12 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
   `dsip_messaging::first_contact` `seal_introduction_with_card`, `seal_grant_profile`, `open_grant_profile`,
   `profile_card_send`; `open_sealed_introduction` returns a card beside the purpose. The relay and the mailbox
   advertise `introduction_max_bytes` 16,384. A sealed purpose is now parsed as §10.3 JSON.
+- Profile cards through the facades. `Messenger::introduce_with_card` seals a card beside the purpose, and every
+  sealed introduction now lists `profile-card/1.0`. `Core`/`Agent::grant_request_with_card` and
+  `GrantRequest::profile` put a card on a grant. Cards received are on `first_contact::Request`/`Grant` and on
+  `Ui::Request`/`Ui::Granted` (`profile`, `profile_cards`, `profile_sent`). `dsip_core::profile_card` gains
+  `seal_grant_profile`, `open_grant_profile`, `list_profile_card`. **Breaking:** `dsip_phone::GrantRequest`,
+  `first_contact::Request` and `first_contact::Grant` have new fields, and the two `Ui` variants have new members.
 
 ## [2026-11-15.1] — workspace release
 

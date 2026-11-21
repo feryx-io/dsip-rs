@@ -25,6 +25,11 @@ pub struct Request {
     pub purpose: Option<String>,
     /// Whether the purpose was sealed.
     pub sealed: bool,
+    /// The introducer's profile card, as taken (§19.4, `profile-card/1.0`): its own unverified claim. `None` when it
+    /// sent none, the card was ignored, or this device cannot open the seal.
+    pub profile: Option<Value>,
+    /// Whether the introducer lists `profile-card/1.0`: the grant answering it may carry the grantor's card (§19.4).
+    pub profile_cards: bool,
     /// The verified payload.
     pub payload: Value,
 }
@@ -40,6 +45,13 @@ pub struct Grant {
     pub scope: Value,
     /// The introduction it answers (`session`).
     pub request: String,
+    /// The grantor's profile card, as taken (§19.4, `profile-card/1.0`): its own unverified claim. `None` when the
+    /// grant carries none, the card is ignored, or this device cannot open it.
+    pub profile: Option<Value>,
+    /// Whether the grant carries a `profile` at all: one without leaves what the receiver holds (§19.4).
+    pub profile_sent: bool,
+    /// Whether the grantor lists `profile-card/1.0`: it may be sent a card from now on (§19.4).
+    pub profile_cards: bool,
 }
 
 /// What a delivered introduction or grant is to this device.
@@ -129,14 +141,21 @@ pub fn received_with(item: &Value, to: &str, ctx: &Context, now: i64, secrets: &
             (true, true) => None,
             _ => Some(opened["purpose"].as_str().or(p["purpose"].as_str()).unwrap_or("").to_string()),
         };
-        Received::Request(Request { id, from, purpose, sealed, payload: p })
+        let profile = opened.get("profile").filter(|c| c.is_object()).cloned();
+        let profile_cards = dsip_core::profile_card::lists_profile_card(&p);
+        Received::Request(Request { id, from, purpose, sealed, profile, profile_cards, payload: p })
     } else {
         let scope = p["scope"].clone();
         if !scope.as_array().is_some_and(|s| s.iter().any(|x| x == "dsip.message")) {
             return Received::NoMessageScope { id, from };
         }
         let envelope = format!("{}.{}.{}", env.protected, env.payload, env.signature);
-        Received::Grant(Grant { from, envelope, scope, request: s("session") })
+        // §19.4: a card that does not open or fails its rules is ignored; the grant stands. The card is bound to the
+        // grant as signed, so it is opened over the verified payload, not the one renamed to the identity above.
+        let signed: Value = dsip_core::b64::decode(&env.payload).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null);
+        let profile = secrets.iter().find_map(|sk| dsip_core::profile_card::open_grant_profile(&signed, sk).ok().flatten());
+        let profile_cards = dsip_core::profile_card::lists_profile_card(&signed);
+        Received::Grant(Grant { from, envelope, scope, request: s("session"), profile, profile_sent: signed.get("profile").is_some(), profile_cards })
     }
 }
 
@@ -161,8 +180,39 @@ mod tests {
         let item = json!({"class": "grant", "envelope": format!("{}.{}.{}", env.protected, env.payload, env.signature)});
         let resolver = dsip_core::did::StaticResolver::default();
         match received(&item, &grantee, &Context::new(NOW, &resolver), NOW, None) {
-            Received::Grant(g) => assert_eq!((g.from, g.request), (identity.did(), "01M6CNVZ52H17DM49J4SAQPFW0".to_string())),
+            Received::Grant(g) => {
+                assert_eq!((g.from, g.request), (identity.did(), "01M6CNVZ52H17DM49J4SAQPFW0".to_string()));
+                assert_eq!((g.profile, g.profile_sent, g.profile_cards), (None, false, false));
+            }
             _ => panic!("not read as a grant"),
         }
+    }
+
+    #[test]
+    fn a_grants_profile_card_opens_for_the_grantee_and_a_bad_one_leaves_the_grant() {
+        // §19.4 (profile-card/1.0): the card is sealed to the grantee identity and bound to the grant as signed
+        let (identity, device, grantee) = (KeyPair::from_seed([1; 32]), KeyPair::from_seed([2; 32]), KeyPair::from_seed([3; 32]));
+        let deleg = dsip_core::delegation::delegation_payload(&identity.did(), &device.did(), NOW - 60, NOW + 86_400, &["dsip.signaling"]);
+        let deleg = sign_bytes(&encode_payload(&deleg), &identity, &identity.kid(), vec![]);
+        let pk = dsip_core::hpke::x25519_public(&dsip_core::hpke::x25519_from_ed25519_seed(&grantee.seed()));
+        let card = json!({"display_name": "Bob"});
+        let read = |card: &Value, opener: Option<&[u8; 32]>| {
+            let mut p = json!({"dsip": {"core": "1.0", "min_core": "1.0", "profiles": [], "extensions": [], "critical": []},
+                               "type": "grant", "id": "01M6CNVZ51GZPHFE0WD2FGDNNC", "from": device.did(), "to": grantee.did(),
+                               "session": "01M6CNVZ52H17DM49J4SAQPFW0", "scope": ["dsip.message"], "valid_until": NOW + 3600,
+                               "issued_at": NOW - 600, "expires_at": NOW - 570});
+            dsip_core::profile_card::seal_grant_profile(&mut p, card, &pk, &[7; 32]);
+            let env = sign_bytes(&encode_payload(&p), &device, &device.kid(), vec![deleg.clone()]);
+            let item = json!({"class": "grant", "envelope": format!("{}.{}.{}", env.protected, env.payload, env.signature)});
+            let resolver = dsip_core::did::StaticResolver::default();
+            match received(&item, &grantee.did(), &Context::new(NOW, &resolver), NOW, opener) {
+                Received::Grant(g) => (g.from, g.profile, g.profile_sent, g.profile_cards),
+                other => panic!("not read as a grant: {other:?}"),
+            }
+        };
+        assert_eq!(read(&card, Some(&grantee.seed())), (identity.did(), Some(card.clone()), true, true));
+        // a card that fails its rules, or a device without the key: the grant is held as if it carried none
+        assert_eq!(read(&json!({"display_name": ""}), Some(&grantee.seed())), (identity.did(), None, true, true));
+        assert_eq!(read(&card, None), (identity.did(), None, true, true));
     }
 }

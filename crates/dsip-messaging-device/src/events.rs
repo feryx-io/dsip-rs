@@ -413,6 +413,16 @@ pub enum Ui {
         scope: Value,
         /// The introduction it answers.
         request: String,
+        /// The grantor's profile card as taken, its own unverified claim (§19.4, `profile-card/1.0`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", tsify(type = "unknown", optional))]
+        profile: Option<Value>,
+        /// Whether the grant carried a `profile` at all; one without leaves what is held (§19.4).
+        #[serde(default)]
+        profile_sent: bool,
+        /// Whether the grantor lists `profile-card/1.0`: it may be sent a card (§19.4).
+        #[serde(default)]
+        profile_cards: bool,
     },
     /// Objects handed over to a successor were sent there (M§9.4).
     HandedOver {
@@ -768,6 +778,13 @@ pub enum Ui {
         sealed: bool,
         /// Whether a purpose travelled in clear.
         purpose_on_wire: bool,
+        /// The introducer's profile card as taken, its own unverified claim (§19.4, `profile-card/1.0`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", tsify(type = "unknown", optional))]
+        profile: Option<Value>,
+        /// Whether the introducer lists `profile-card/1.0`: the grant answering it may carry our card (§19.4).
+        #[serde(default)]
+        profile_cards: bool,
     },
     /// The cursor was invalid: syncing from the start (M§5.4).
     Resync,
