@@ -14,7 +14,7 @@ with the [usage guide](docs/dsip-rs-guide.md).
   the Python reference harness and a second, TypeScript implementation. It is where the spec changes and where
   vectors are written. This repository grew there as its reference implementation (`impl/`) and keeps that history.
   DSIP is the `spec/` submodule here, pinned to a tag.
-- **[siphon-rs](https://github.com/thevoiceguy/siphon-rs)**, the SIP stack, is a sibling. dsip-rs follows its
+- **[siphon-rs](https://github.com/feryx-io/siphon-rs)**, the SIP stack, is a sibling. dsip-rs follows its
   conventions: the release model in [`RELEASING.md`](RELEASING.md), facades over low-level crates, storage behind
   traits, and a testkit. The gateway uses siphon-rs for its SIP leg, and the media path uses forge-media. Both are
   git dependencies pinned to a rev.
