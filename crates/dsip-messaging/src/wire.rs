@@ -92,6 +92,8 @@ pub fn mailbox_capabilities(hub: bool, blob_endpoint: &str, max_blob_bytes: i64)
     json!({
         "max_envelope_bytes": dsip_core::WS_MAX_ENVELOPE_BYTES,
         "store_and_forward": true,
+        // §19.4 (profile-card/1.0): this mailbox takes the larger introductions
+        "introduction_max_bytes": dsip_core::profile_card::INTRODUCTION_CARD_MAX_BYTES,
         "mailbox": {
             "profiles": [PROFILE],
             "modes": ["sync", "queue"],

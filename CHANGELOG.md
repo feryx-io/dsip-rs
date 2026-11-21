@@ -7,6 +7,12 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+- Profile cards, the extension `profile-card/1.0` (DSIP spec-gap 186): `dsip_core::profile_card` (the card's rules,
+  the 16,384-byte cap of an introduction that carries `sealed` and lists the extension), and in
+  `dsip_messaging::first_contact` `seal_introduction_with_card`, `seal_grant_profile`, `open_grant_profile`,
+  `profile_card_send`; `open_sealed_introduction` returns a card beside the purpose. The relay and the mailbox
+  advertise `introduction_max_bytes` 16,384. A sealed purpose is now parsed as §10.3 JSON.
+
 ## [2026-11-15.1] — workspace release
 
 Mailbox admission codes: an operator's mailbox can enrol only the identities it chose, by a code given out of band

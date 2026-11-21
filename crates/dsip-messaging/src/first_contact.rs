@@ -3,7 +3,9 @@
 //! Spec: M§6.9 (HPKE base mode, DHKEM(X25519, HKDF-SHA256) / HKDF-SHA256 / AES-128-GCM; the recipient key is the
 //! identity's X25519 key agreement key, derived from Ed25519 as `did:key` defines — [`x25519_from_ed25519_seed`]),
 //! M§14.1 (`sealed` replaces `purpose`, `info` = `"dsip sealed introduction v1"`, AAD `id ‖ 0 ‖ from ‖ 0 ‖ to`,
-//! never both — [`check_introduction`], [`seal_introduction`], [`open_sealed_introduction`]), core §19.4.
+//! never both — [`check_introduction`], [`seal_introduction`], [`open_sealed_introduction`]), core §19.4
+//! (and its extension `profile-card/1.0`: a card beside the sealed purpose, a grant's `profile`, and whether one may
+//! be sent — [`seal_introduction_with_card`], [`seal_grant_profile`], [`open_grant_profile`], [`profile_card_send`]).
 //!
 //! Impl: RFC 9180 is implemented here from its definition (single-shot base mode, sequence 0), so that vectors can
 //! pin it byte for byte; it is anchored by the RFC's own Appendix A.1.1 test vector (`messaging/hpke-open-rfc9180-*`)
@@ -14,6 +16,8 @@
 use serde_json::{json, Value};
 
 pub use dsip_core::hpke::{hpke_derive_sk, hpke_open, hpke_seal, x25519_from_ed25519_seed, x25519_public};
+
+use dsip_core::profile_card::{lists_profile_card, take_card, PROFILE_CARD_EXT};
 
 use crate::checks::{accept_effective, reject};
 
@@ -88,17 +92,126 @@ pub fn open_sealed_introduction_with(p: &Value, sk: &[u8; 32]) -> Value {
     let Some(pt) = hpke_open(&d("enc"), sk, SEALED_INFO, &sealed_aad(p), &d("ct")) else {
         return reject("sealed-open-failed", None);
     };
-    let Ok(Value::Object(body)) = serde_json::from_slice::<Value>(&pt) else {
+    // §10.3: UTF-8, a JSON object, no floats
+    let Ok(Value::Object(body)) = dsip_core::wire::parse_payload(&pt, false) else {
         return reject("sealed-plaintext-invalid", None);
     };
-    let purpose = match (body.len(), body.get("purpose").and_then(Value::as_str)) {
-        (1, Some(p)) => p.to_string(),
-        _ => return reject("sealed-plaintext-invalid", None),
+    // §19.4: exactly `purpose`, optionally with `profile` (profile-card/1.0, spec-gap 186)
+    let Some(purpose) = body.get("purpose").and_then(Value::as_str) else {
+        return reject("sealed-plaintext-invalid", None);
     };
+    if body.keys().any(|k| k != "purpose" && k != "profile") {
+        return reject("sealed-plaintext-invalid", None);
+    }
     if purpose.chars().count() > PURPOSE_MAX_CHARS {
         return reject("purpose-too-long", None);
     }
-    json!({"verdict": "accept", "purpose": purpose})
+    let Some(card) = body.get("profile") else {
+        return json!({"verdict": "accept", "purpose": purpose});
+    };
+    // A card that fails, or one on an introduction that does not list the extension, leaves the purpose as it is.
+    match lists_profile_card(p).then(|| take_card(card)).flatten() {
+        Some(card) => json!({"verdict": "accept", "purpose": purpose, "profile": card}),
+        None => json!({"verdict": "accept", "purpose": purpose, "profile_ignored": true}),
+    }
+}
+
+/// HPKE `info` for a grant's profile card.
+///
+/// Spec: §19.4.
+pub const PROFILE_INFO: &[u8] = b"dsip profile card v1";
+
+fn list_extension(p: &mut Value) {
+    let Some(exts) = p["dsip"]["extensions"].as_array_mut() else { return };
+    if !exts.iter().any(|x| x == PROFILE_CARD_EXT) {
+        exts.push(json!(PROFILE_CARD_EXT));
+    }
+}
+
+/// Seal `purpose` and the introducer's `card` into an introduction payload for the recipient's X25519 key, and list
+/// `profile-card/1.0`. Only for a recipient known to support the extension ([`profile_card_send`]).
+///
+/// Spec: §19.4, M§14.1.
+pub fn seal_introduction_with_card(p: &mut Value, purpose: &str, card: &Value, pk_r: &[u8; 32], sk_e: &[u8; 32]) {
+    list_extension(p);
+    let pt = serde_json::to_vec(&json!({"purpose": purpose, "profile": card})).expect("json");
+    let (enc, ct) = hpke_seal(pk_r, SEALED_INFO, &sealed_aad(p), &pt, sk_e);
+    if let Some(m) = p.as_object_mut() {
+        m.remove("purpose");
+    }
+    p["sealed"] = json!({"alg": SEALED_ALG, "enc": dsip_core::b64::encode(&enc), "ct": dsip_core::b64::encode(&ct)});
+}
+
+/// Seal the grantor's `card` into a grant payload as `profile`, for the grantee identity's X25519 key, and list
+/// `profile-card/1.0`. Only for a grantee known to support the extension ([`profile_card_send`]).
+///
+/// Spec: §19.4.
+pub fn seal_grant_profile(g: &mut Value, card: &Value, pk_r: &[u8; 32], sk_e: &[u8; 32]) {
+    list_extension(g);
+    let pt = serde_json::to_vec(&json!({"profile": card})).expect("json");
+    let (enc, ct) = hpke_seal(pk_r, PROFILE_INFO, &sealed_aad(g), &pt, sk_e);
+    g["profile"] = json!({"alg": SEALED_ALG, "enc": dsip_core::b64::encode(&enc), "ct": dsip_core::b64::encode(&ct)});
+}
+
+/// The card a grant's `profile` carries, opened with the grantee's Ed25519 identity seed: `accept` with `profile`
+/// (`null` for a grant without one), or why the card is ignored. The grant stands either way.
+///
+/// Spec: §19.4.
+pub fn open_grant_profile(g: &Value, recipient_seed: &[u8; 32]) -> Value {
+    open_grant_profile_with(g, &x25519_from_ed25519_seed(recipient_seed))
+}
+
+/// As [`open_grant_profile`], with the grantee's X25519 key agreement secret itself.
+///
+/// Spec: §19.4, §7.3.
+pub fn open_grant_profile_with(g: &Value, sk: &[u8; 32]) -> Value {
+    let Some(sealed) = g.get("profile") else {
+        return json!({"verdict": "accept", "profile": null});
+    };
+    if !lists_profile_card(g) {
+        return reject("profile-extension-unlisted", None);
+    }
+    if sealed["alg"] != SEALED_ALG {
+        return reject("sealed-alg-unsupported", None);
+    }
+    let d = |k: &str| sealed[k].as_str().and_then(dsip_core::b64::decode).unwrap_or_default();
+    let Some(pt) = hpke_open(&d("enc"), sk, PROFILE_INFO, &sealed_aad(g), &d("ct")) else {
+        return reject("sealed-open-failed", None);
+    };
+    // §10.3: UTF-8, a JSON object, no floats
+    let Ok(Value::Object(body)) = dsip_core::wire::parse_payload(&pt, false) else {
+        return reject("sealed-plaintext-invalid", None);
+    };
+    let (1, Some(card)) = (body.len(), body.get("profile")) else {
+        return reject("sealed-plaintext-invalid", None);
+    };
+    match take_card(card) {
+        Some(card) => json!({"verdict": "accept", "profile": card}),
+        None => reject("profile-card-invalid", None),
+    }
+}
+
+/// Whether a card goes with an introduction or a grant: only by the user's standing choice, only to an identity
+/// known to support the extension (it listed it on a message to us, its DID document lists it in `dsipExtensions`, or
+/// it said so out of band), and on an introduction only through a service that takes an envelope of that size.
+///
+/// Spec: §19.4, §11.4.
+pub fn profile_card_send(inp: &Value) -> Value {
+    if inp["sharing"] != true {
+        return json!({"card": false, "why": "sharing-off"});
+    }
+    let has = |v: &Value| v.as_array().is_some_and(|a| a.iter().any(|x| x == PROFILE_CARD_EXT));
+    let peer = &inp["peer"];
+    if !(has(&peer["listed"]) || has(&peer["document"]["dsipExtensions"]) || has(&peer["out_of_band"])) {
+        return json!({"card": false, "why": "peer-unsupported"});
+    }
+    if inp["carrier"] == "introduction" {
+        let cap = inp["service_introduction_max_bytes"].as_u64().unwrap_or(dsip_core::INTRODUCTION_MAX_BYTES as u64);
+        if inp["encoded_size"].as_u64().unwrap_or(u64::MAX) > cap {
+            return json!({"card": false, "why": "service-cap"});
+        }
+    }
+    json!({"card": true})
 }
 
 fn hex_in(v: &Value) -> Vec<u8> {
@@ -125,6 +238,8 @@ pub fn run_check(check: &str, inp: &Value) -> Option<Value> {
         "x25519-key-agreement" => json!({"x25519_pk_hex": hex::encode(x25519_public(&x25519_from_ed25519_seed(&arr32(&inp["ed25519_seed_hex"]))))}),
         "introduction" => check_introduction(&inp["payload"]),
         "sealed-introduction-open" => open_sealed_introduction(&inp["payload"], &arr32(&inp["recipient_ed25519_seed_hex"])),
+        "grant-profile-open" => open_grant_profile(&inp["grant"], &arr32(&inp["recipient_ed25519_seed_hex"])),
+        "profile-card-send" => profile_card_send(inp),
         _ => return None,
     })
 }

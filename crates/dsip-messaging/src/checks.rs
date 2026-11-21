@@ -168,8 +168,9 @@ fn check_deposit(p: &Value) -> Value {
     if first_contact == keys.contains("group") || (first_contact && !keys.contains("recipient")) {
         return reject("deposit-fields", None); // spec-gap 54: first-contact deposits name a recipient and no group
     }
-    if class == "introduction" && p["envelope"].as_str().is_some_and(|e| e.len() > dsip_core::INTRODUCTION_MAX_BYTES) {
-        return reject("introduction-too-large", Some("transport.envelope-too-large")); // §19.4
+    if class == "introduction" && p["envelope"].as_str().is_some_and(|e| e.len() > dsip_core::profile_card::introduction_cap_compact(e)) {
+        // §19.4: 4,096, or 16,384 for one that carries `sealed` and lists profile-card/1.0 (spec-gap 186)
+        return reject("introduction-too-large", Some("transport.envelope-too-large"));
     }
     if SIZED_FIELDS.iter().any(|f| p[*f].as_str().is_some_and(|s| decoded_len(s) > MAX_MLS_BYTES)) {
         return reject("object-too-large", Some("mailbox.object-too-large")); // M§5.1
