@@ -920,6 +920,8 @@ impl RelayServer {
                 "in_reply_to": hello_id, "from": st.key.did(),
                 "capabilities": {"max_envelope_bytes": dsip_core::WS_MAX_ENVELOPE_BYTES, "store_and_forward": true,
                                  "offline_retention_s": st.offline_retention,
+                                 // §19.4 (profile-card/1.0): this relay holds the larger introductions
+                                 "introduction_max_bytes": dsip_core::profile_card::INTRODUCTION_CARD_MAX_BYTES,
                                  "rate_limit": {"envelopes_per_minute": 600, "invites_per_minute": 30}},
                 "issued_at": now, "expires_at": now + 30,
             });

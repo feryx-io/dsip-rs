@@ -15,7 +15,7 @@ use dsip_core::registry::{
     INTEGRITY_MODES, PRESENCE_STATES, REASON_BEARING_TYPES, SUBSCRIPTION_EVENTS,
 };
 use dsip_core::version::{check_version, Supported};
-use dsip_core::{RejectCode, Verdict, INTRODUCTION_MAX_BYTES};
+use dsip_core::{RejectCode, Verdict};
 
 use crate::validate::validate;
 
@@ -136,8 +136,9 @@ pub fn check_semantic(payload: &Value, ctx: &SemanticContext) -> Verdict {
     }
     if t == "introduction" {
         if let Some(size) = ctx.encoded_size {
-            if size > INTRODUCTION_MAX_BYTES {
-                return Verdict::reject(RejectCode::IntroductionTooLarge); // §19.4
+            // §19.4: 4,096, or 16,384 with `sealed` and profile-card/1.0 listed (spec-gap 186)
+            if size > dsip_core::profile_card::introduction_cap(payload) {
+                return Verdict::reject(RejectCode::IntroductionTooLarge);
             }
         }
         if payload.get("purpose").is_some() && payload.get("sealed").is_some() {

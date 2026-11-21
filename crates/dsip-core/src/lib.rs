@@ -24,6 +24,7 @@ pub mod hpke;
 pub mod keys;
 pub mod pkarr;
 pub mod presence_seal;
+pub mod profile_card;
 pub mod registry;
 pub mod trust;
 pub mod ulid;
