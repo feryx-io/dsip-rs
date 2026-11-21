@@ -164,10 +164,31 @@ pub fn reachability_with(
     ttl_s: i64,
     key_agreement: Option<&Envelope>,
 ) -> Envelope {
+    reachability_listing(identity, device, delegation, endpoints, seq, now, ttl_s, key_agreement, &[])
+}
+
+/// As [`reachability_with`], listing `extensions` in the hint's own `dsip.extensions` (DHT Hints Profile §3): the
+/// identity saying it supports them, to whoever verifies the hint while it lasts. An identity with no document
+/// says it supports `profile-card/1.0` this way (core §19.4, spec-gap 189).
+#[allow(clippy::too_many_arguments)] // a hint's fields, as `reachability`'s
+pub fn reachability_listing(
+    identity: &str,
+    device: &KeyPair,
+    delegation: &Envelope,
+    endpoints: &[Endpoint],
+    seq: i64,
+    now: i64,
+    ttl_s: i64,
+    key_agreement: Option<&Envelope>,
+    extensions: &[&str],
+) -> Envelope {
     let ttl = ttl_s.clamp(3, dsip_core::HINT_MAX_VALIDITY_S);
     // its id's time is its issue time (§12.9: a ULID consistent with `issued_at`)
     let id = dsip_core::ulid::Ulid::generate_at((now.max(0) as u64) * 1000);
     let mut payload = dsip_dht::record::hint_payload_with_id(identity, identity, endpoints, seq, now, ttl, id.as_str());
+    if !extensions.is_empty() {
+        payload["dsip"]["extensions"] = json!(extensions);
+    }
     if let Some(ka) = key_agreement {
         payload["key_agreement"] = json!({"protected": ka.protected, "payload": ka.payload, "signature": ka.signature});
     }
@@ -217,6 +238,21 @@ mod tests {
         assert!(entries[0].get("service").is_none());
         let choice = dsip_messaging_select(&entries);
         assert_eq!(choice, Some(mailbox));
+    }
+
+    #[test]
+    fn a_hint_lists_the_extensions_its_subject_supports() {
+        let (controller, device) = (KeyPair::generate(), KeyPair::generate());
+        let now = 1_790_000_000;
+        let p = dsip_core::delegation::delegation_payload(&controller.did(), &device.did(), now - 60, now + 86_400, &["dsip.signaling"]);
+        let delegation = dsip_core::envelope::sign(&p, &controller, &controller.kid());
+        let advertised = endpoints(Some("wss://relay.test/dsip"), None);
+        let resolver = StaticResolver::default();
+        let listed = |hint: &Envelope| dsip_dht::record::select(&[hint.frame()], &Context::new(now, &resolver)).0.expect("it verifies").extensions;
+        let with = reachability_listing(&controller.did(), &device, &delegation, &advertised, 7, now, 3600, None, &["profile-card/1.0"]);
+        assert_eq!(listed(&with), ["profile-card/1.0"]);
+        let without = reachability(&controller.did(), &device, &delegation, &advertised, 7, now, 3600);
+        assert!(listed(&without).is_empty());
     }
 
     /// M§4.2's selection, as dsip-messaging makes it, reduced to what this test needs (the crate is not a dependency).

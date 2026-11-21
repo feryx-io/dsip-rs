@@ -111,6 +111,10 @@ pub struct Hint {
     pub frame: String,
     /// The subject's key agreement delegation the hint carried, verified (DHT Hints Profile §2; core §7.3).
     pub key_agreement: Option<Value>,
+    /// The extensions the hint's own `dsip.extensions` lists (DHT Hints Profile §3): while the hint is verified and
+    /// unexpired, its subject saying it supports them (core §19.4, spec-gap 189).
+    #[serde(default)]
+    pub extensions: Vec<String>,
 }
 
 /// Outcome of comparing a verified input against an existing record (§8.3).
@@ -200,6 +204,7 @@ pub fn evaluate(frame: &str, ctx: &Context, existing: Option<&Envelope>) -> Eval
         signer: ver.signer_did.clone(),
         frame: frame.to_string(),
         key_agreement: p.get("key_agreement").cloned(),
+        extensions: serde_json::from_value(p["dsip"]["extensions"].clone()).unwrap_or_default(),
     };
     let (mut winner, mut conflict) = ("input", Conflict::None);
     if let Some(ex_env) = existing {
