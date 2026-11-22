@@ -25,7 +25,7 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 - A grantee learns that a grant was revoked (DSIP spec-gap 190). `dsip_phone::Phone::share_ended` gives a
   `ShareEnded` when a presence subscription that presented grants held from an identity is ended with
   `policy.terminated` while one of them still ran: all a grantee sees of a revocation, and when the receiver of a
-  grant's profile card stops showing it (§19.4). `spec/` moves to DSIP 6f8d55f.
+  grant's profile card stops showing it (§19.4). `spec/` moves to DSIP 25ebeff.
 
 ## [2026-11-15.1] — workspace release
 
