@@ -563,7 +563,20 @@ pub struct Call {
     error: Arc<std::sync::Mutex<Option<String>>>,
     heard: Arc<std::sync::atomic::AtomicBool>,
     video: Arc<std::sync::atomic::AtomicBool>,
+    asked: Arc<std::sync::atomic::AtomicU8>,
     line: Line,
+}
+
+/// Where this side's asking for video in a call under way is ([`Call::add_video`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum VideoAsk {
+    /// Not asked, or asked and taken ([`Call::video`] says which).
+    No = 0,
+    /// Asked: the `update` is out, not yet answered (§12.8 rule 2).
+    Asked = 1,
+    /// Asked and not taken: the far end refused the update, or its answer refused the video section (B§2.1).
+    Refused = 2,
 }
 
 impl Call {
@@ -594,10 +607,28 @@ impl Call {
         self.heard.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// Whether the call carries video (B§3.4): it was offered with it ([`Phone::video_call`], or a caller's offer this
-    /// phone could take), and the answer did not refuse it. Known once the offer or answer is made (native media only).
+    /// Whether the call carries video (B§3.4): it was offered with it ([`Phone::video_call`], a caller's offer this
+    /// phone could take, or either side's adding it to the call under way, [`Call::add_video`]), and the answer did
+    /// not refuse it. Known once the offer or answer is made (native media only).
     pub fn video(&self) -> bool {
         self.video.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Add video to the call, answered with audio only (§12.8, B§5.3): an `update` that re-offers with a video
+    /// section. [`Call::video`] turns true once the far end's answer takes it; [`Call::video_ask`] says where the
+    /// asking is until then. Nothing is sent by a phone without video, for a call not answered, or while another
+    /// update is out (§12.8 rule 2).
+    pub fn add_video(&self) {
+        self.line.send(Cmd::Call(dsip_endpoint::CallCommand::AddVideo { session: self.session.clone() }));
+    }
+
+    /// Where this side's [`Call::add_video`] is: asked and waiting, refused, or neither.
+    pub fn video_ask(&self) -> VideoAsk {
+        match self.asked.load(std::sync::atomic::Ordering::Relaxed) {
+            1 => VideoAsk::Asked,
+            2 => VideoAsk::Refused,
+            _ => VideoAsk::No,
+        }
     }
 
     /// Wait for the next change of state; the state it changed to, or `None` once the phone has closed.

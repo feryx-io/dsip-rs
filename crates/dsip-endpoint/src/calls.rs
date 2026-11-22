@@ -123,6 +123,12 @@ pub enum MediaRequest {
         /// Session id.
         session: String,
     },
+    /// Discard the offer the leg made for an `update` that was rejected or lost a glare: the media is as it was last
+    /// negotiated (B§5.2, §12.8 rule 5). A video section that offer added is taken away again.
+    Rollback {
+        /// Session id.
+        session: String,
+    },
 }
 
 /// The host's answer to a [`MediaRequest`], or a media event.
@@ -304,6 +310,12 @@ pub enum CallCommand {
         /// Session id.
         session: String,
     },
+    /// Add video to an audio call: re-offer with a video section appended (§12.8, B§5.3). The far end's answer says
+    /// whether it takes it (B§2.1: a refused section has port 0).
+    AddVideo {
+        /// Session id.
+        session: String,
+    },
     /// Answer the peer's outstanding update.
     AnswerUpdate {
         /// Session id.
@@ -355,6 +367,10 @@ struct Call {
     in_clear: bool,
     /// Media started (the engine's `start` for this session has been acted on).
     started: bool,
+    /// The leg's last offer or answer has a video section: a re-offer keeps it.
+    video: bool,
+    /// Our `update` is out, not yet answered or refused (§12.8 rule 2).
+    updating: bool,
 }
 
 impl Call {
@@ -369,6 +385,8 @@ impl Call {
             awaiting: None,
             in_clear: false,
             started: false,
+            video: false,
+            updating: false,
         }
     }
 }
@@ -545,13 +563,31 @@ impl Calls {
                 }
             }
             "update" => {
+                // §12.8 rule 3: ours was out too. The engine kept the one with the smaller id: theirs stands only if
+                // it is the session's outstanding update now.
+                let stands = core.endpoint().session(sid).and_then(|s| s.outstanding.as_ref()).is_some_and(|o| o.id == id);
+                if !stands {
+                    return Ok(out);
+                }
+                if std::mem::take(&mut call.updating) && media {
+                    // ours lost: its offer is discarded before theirs is answered (B§5.2)
+                    out.push(CallOut::Media(MediaRequest::Rollback { session: sid.to_string() }));
+                }
                 call.pending_update = Some(id.to_string());
                 if media {
                     call.remote_offer = remote_sdp;
                 }
                 out.push(CallOut::Call(CallEvent::UpdateOffered { session: sid.to_string(), id: id.to_string() }));
             }
+            // §12.8 rule 5: our update refused; the session, and the media, stay as they were
+            "reject" | "error" if call.updating && core.endpoint().session(sid).is_some_and(|s| s.state == SessionState::Active && s.outstanding.is_none()) => {
+                call.updating = false;
+                if media {
+                    out.push(CallOut::Media(MediaRequest::Rollback { session: sid.to_string() }));
+                }
+            }
             "answer" => {
+                call.updating = false;
                 if let (true, Some(sdp)) = (media, remote_sdp) {
                     out.push(CallOut::Media(MediaRequest::ApplyAnswer { session: sid.to_string(), sdp }));
                 }
@@ -689,7 +725,10 @@ impl Calls {
                 self.flush(core, &session, now)
             }
             MediaResult::Offer { session, sdp } | MediaResult::Answer { session, sdp } => {
-                let Some(awaiting) = self.calls.get_mut(&session).and_then(|c| c.awaiting.take()) else { return Ok(vec![]) };
+                let Some(call) = self.calls.get_mut(&session) else { return Ok(vec![]) };
+                let Some(awaiting) = call.awaiting.take() else { return Ok(vec![]) };
+                call.video = crate::core::carries_video(&sdp);
+                call.updating = matches!(awaiting, Awaiting::Update { .. });
                 let sdp = Some(sdp);
                 let cmd = match awaiting {
                     Awaiting::Place { to, invite } => {
@@ -709,12 +748,18 @@ impl Calls {
         }
     }
 
-    /// Re-offer: with media, ask the host for the SDP offer first; escalating adds the local source (§14.4).
-    fn update(&mut self, core: &mut Core, session: String, escalate: bool, now: i64) -> Result<Vec<CallOut>> {
+    /// Re-offer: with media, ask the host for the SDP offer first; escalating adds the local source (§14.4), and
+    /// `add_video` a video section (B§5.3). A call that has video keeps it.
+    fn update(&mut self, core: &mut Core, session: String, escalate: bool, add_video: bool, now: i64) -> Result<Vec<CallOut>> {
         let answered_by = escalate.then_some("user");
         if let (true, Some(call)) = (self.cfg.media, self.calls.get_mut(&session)) {
+            // §12.8 rule 2: one update outstanding per session, either direction; a second is not sent
+            let busy = call.updating || call.pending_update.is_some() || matches!(call.awaiting, Some(Awaiting::Update { .. } | Awaiting::AnswerUpdate { .. }));
+            if busy || core.endpoint().session(&session).is_none_or(|s| s.state != SessionState::Active || s.outstanding.is_some()) {
+                return Ok(vec![]);
+            }
             call.awaiting = Some(Awaiting::Update { answered_by });
-            let video = core.video();
+            let video = add_video || call.video || core.video();
             return Ok(vec![CallOut::Media(MediaRequest::Offer { session, add_source: escalate, video })]);
         }
         let id = core.new_id(now);
@@ -741,8 +786,9 @@ impl Calls {
             CallCommand::Cancel { session } => self.local(core, LocalEvent::Cancel { session }, now),
             CallCommand::Hangup { session } => self.local(core, LocalEvent::Hangup { session, reason: None }, now),
             CallCommand::Info { session } => self.local(core, LocalEvent::Info { session }, now),
-            CallCommand::Update { session } => self.update(core, session, false, now),
-            CallCommand::Escalate { session } => self.update(core, session, true, now),
+            CallCommand::Update { session } => self.update(core, session, false, false, now),
+            CallCommand::Escalate { session } => self.update(core, session, true, false, now),
+            CallCommand::AddVideo { session } => self.update(core, session, false, true, now),
             CallCommand::AnswerUpdate { session } => {
                 let Some(call) = self.calls.get_mut(&session) else { return Ok(vec![]) };
                 let Some(in_reply_to) = call.pending_update.take() else { return Ok(vec![]) };

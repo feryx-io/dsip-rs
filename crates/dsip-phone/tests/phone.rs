@@ -339,3 +339,75 @@ async fn a_plain_call_between_video_phones_offers_no_video() {
     call.hang_up();
     ca.abort();
 }
+
+/// Wait until `want` holds.
+async fn until(what: &str, want: impl Fn() -> bool) {
+    within(what, async {
+        while !want() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn video_is_added_to_an_audio_call_under_way() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    if !dsip_media::Backend::available().contains(&dsip_media::Backend::Forge) {
+        return; // video is the forge backend's for now
+    }
+    let net = Network::new();
+    let mut alice = video_phone(&net, "Alice", AnswerPolicy::Ring).await;
+    let mut bob = video_phone(&net, "Bob", AnswerPolicy::Accept).await;
+    let (ca, cb) = (camera(alice.frames.clone()), camera(bob.frames.clone()));
+
+    let mut call = alice.phone.call(bob.phone.identity()).await.unwrap();
+    let theirs = within("incoming call", bob.phone.incoming()).await.unwrap().call;
+    assert!(matches!(within("answer", call.outcome()).await, Outcome::Answered { .. }));
+    until("audio both ways", || call.media_received() && theirs.media_received()).await;
+    assert!(!call.video() && !theirs.video());
+
+    // §12.8, B§5.3: the callee adds video; its update appends a video section, and the caller's answer takes it
+    theirs.add_video();
+    until("both sides know the call has video", || call.video() && theirs.video()).await;
+    assert_eq!(theirs.video_ask(), dsip_phone::VideoAsk::No, "asked and taken");
+    // on the transport the call already had: each side's frames reach the other's decoder
+    let a = within("video at Alice", alice.received.recv()).await.unwrap();
+    let b = within("video at Bob", bob.received.recv()).await.unwrap();
+    assert!(a.keyframe && b.keyframe && a.data.len() > 3_000 && b.data.len() > 3_000);
+    // and the sound goes on
+    assert!(matches!(call.state(), dsip_phone::CallState::Answered { .. }));
+    call.hang_up();
+    ca.abort();
+    cb.abort();
+}
+
+#[tokio::test]
+async fn video_asked_of_a_phone_without_it_is_refused_and_the_call_goes_on() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    if !dsip_media::Backend::available().contains(&dsip_media::Backend::Forge) {
+        return;
+    }
+    let net = Network::new();
+    let alice = video_phone(&net, "Alice", AnswerPolicy::Ring).await;
+    let bob = Phone::builder().identity(net.identity("Bob")).dialer(net.dialer())
+        .media(dsip_phone::Media::Native(dsip_media::MediaConfig { source: dsip_media::Source::Tone { hz: 440.0 }, ..Default::default() }))
+        .answer(AnswerPolicy::Accept).build().await.unwrap();
+
+    let mut call = alice.phone.call(bob.identity()).await.unwrap();
+    let mut theirs = within("incoming call", bob.incoming()).await.unwrap().call;
+    assert!(matches!(within("answer", call.outcome()).await, Outcome::Answered { .. }));
+    until("audio both ways", || call.media_received() && theirs.media_received()).await;
+
+    call.add_video();
+    // B§2.1: Bob's answer refuses the section it has no video for (port 0); the call is as it was
+    until("the asking is settled", || call.video_ask() == dsip_phone::VideoAsk::Refused).await;
+    assert!(!call.video() && !theirs.video());
+    assert!(matches!(call.state(), dsip_phone::CallState::Answered { .. }));
+    // a phone without video asks for none
+    theirs.add_video();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(theirs.video_ask(), dsip_phone::VideoAsk::No, "nothing was sent");
+    call.hang_up();
+    assert_eq!(within("bye at Bob", theirs.ended()).await, "user.hangup");
+}

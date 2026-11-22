@@ -26,6 +26,16 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
   `ShareEnded` when a presence subscription that presented grants held from an identity is ended with
   `policy.terminated` while one of them still ran: all a grantee sees of a revocation, and when the receiver of a
   grant's profile card stops showing it (§19.4). `spec/` moves to DSIP 25ebeff.
+- Video added to a call under way (§12.8, B§5.2–B§5.3). `dsip_endpoint::CallCommand::AddVideo` re-offers with a
+  video section; `dsip_phone::Call::add_video` asks for it, `Call::video_ask` (`VideoAsk`) says whether the asking
+  waits or was refused, and `Call::video` turns true once the answer takes it. `dsip_media::MediaLeg` gains
+  `add_video`, `drop_video` and `rollback` (forge). An `update`'s `media[]` now follows the SDP it carries (B§2.1),
+  and a call that has video keeps it in a later re-offer. A rejected update, or one that lost a glare, gives
+  `MediaRequest::Rollback`: the leg discards its offer (B§5.2); the browser client does the same. A second update
+  is not sent while one is outstanding (§12.8 rule 2), and the winner of a glare is no longer told
+  `UpdateOffered` for the update it rejected. **Changed:** `dsip-phone` answers the far end's `update` (it left
+  them unanswered); a phone with video takes video added by the far end, and its application decides whether its
+  own camera sends. **Breaking:** `CallCommand` and `MediaRequest` have a new variant each.
 
 ## [2026-11-15.1] — workspace release
 

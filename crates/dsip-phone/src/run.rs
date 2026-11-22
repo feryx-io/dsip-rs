@@ -23,6 +23,8 @@ struct Track {
     heard: std::sync::Arc<std::sync::atomic::AtomicBool>,
     #[cfg_attr(not(feature = "media"), allow(dead_code))]
     video: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Where this side's asking for video is ([`crate::VideoAsk`], as its number).
+    asked: std::sync::Arc<std::sync::atomic::AtomicU8>,
 }
 
 pub(crate) struct Runner {
@@ -150,6 +152,15 @@ impl Runner {
                 let _ = reply.send(placed.map_err(Into::into));
             }
             Cmd::Call(c) => {
+                if let dsip_endpoint::CallCommand::AddVideo { session } = &c {
+                    // a phone without video has none to add: nothing is sent
+                    if !self.has_video() {
+                        return Ok(());
+                    }
+                    if let Some(t) = self.calls.get(session) {
+                        t.asked.store(crate::VideoAsk::Asked as u8, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
                 if let Err(e) = self.agent.call(c).await {
                     tracing::warn!("call command: {e}");
                 }
@@ -219,9 +230,10 @@ impl Runner {
         let (tx, rx) = watch::channel(state);
         let (error, heard) = (std::sync::Arc::default(), std::sync::Arc::<std::sync::atomic::AtomicBool>::default());
         let video = std::sync::Arc::<std::sync::atomic::AtomicBool>::default();
+        let asked = std::sync::Arc::<std::sync::atomic::AtomicU8>::default();
         self.calls.insert(session.clone(), Track { state: tx, error: std::sync::Arc::clone(&error), heard: std::sync::Arc::clone(&heard),
-                                                   video: std::sync::Arc::clone(&video) });
-        Call { session, via: None, state: rx, error, heard, video, line: self.line.clone() }
+                                                   video: std::sync::Arc::clone(&video), asked: std::sync::Arc::clone(&asked) });
+        Call { session, via: None, state: rx, error, heard, video, asked, line: self.line.clone() }
     }
 
     async fn observe(&mut self, events: Vec<AgentEvent>) -> Result<()> {
@@ -276,6 +288,14 @@ impl Runner {
                 }
                 AgentEvent::Emission(Emission::Ui(UiEvent::Ended { reason })) => b.ended.push_back(reason),
                 AgentEvent::Emission(Emission::Ui(UiEvent::Answered { answered_by })) => b.answered.push_back(answered_by),
+                // Impl: the far end's update is answered as it comes, the host's choice as the answer policy is: what
+                // this phone can take of it its answer selects (a video section it has no video for is refused,
+                // B§2.1), and whether its own camera then sends is the application's to say.
+                AgentEvent::Call(dsip_endpoint::CallEvent::UpdateOffered { session, .. }) => {
+                    if let Err(e) = self.agent.call(CallCommand::AnswerUpdate { session }).await {
+                        tracing::warn!("answering an update: {e}");
+                    }
+                }
                 AgentEvent::Media(req) => {
                     let session = media_session(&req);
                     if let Err(e) = self.media(req).await {
@@ -347,19 +367,42 @@ impl Runner {
         }
     }
 
+    /// Whether the phone's media has a video section.
+    fn has_video(&self) -> bool {
+        #[cfg(feature = "media")]
+        return self.legs.has_video();
+        #[cfg(not(feature = "media"))]
+        false
+    }
+
     #[cfg(feature = "media")]
     async fn media(&mut self, req: MediaRequest) -> Result<()> {
-        // whether the call carries video: its leg has a video section, and the answer did not refuse it (B§2.1)
+        use std::sync::atomic::Ordering::Relaxed;
+        // whether the call carries video: its leg has a video section, and the offer answered or the answer to ours
+        // has it (B§2.1: a refused section has port 0). A re-offer on a call under way changes nothing until it is
+        // answered (§12.8 rule 1); one refused leaves the call as it was (rule 5).
         let video = match &req {
-            MediaRequest::Offer { session, .. } | MediaRequest::Answer { session, .. } => Some((session.clone(), None)),
-            MediaRequest::ApplyAnswer { session, sdp } => Some((session.clone(), Some(legs::offers_video(sdp)))),
+            MediaRequest::Offer { session, .. }
+                if !self.agent.endpoint().session(session).is_some_and(|x| x.state == SessionState::Active) =>
+            {
+                Some((session.clone(), true, false))
+            }
+            MediaRequest::Answer { session, offer, .. } => Some((session.clone(), legs::offers_video(offer), false)),
+            MediaRequest::ApplyAnswer { session, sdp } => Some((session.clone(), legs::offers_video(sdp), true)),
+            MediaRequest::Rollback { session } => Some((session.clone(), true, true)),
             _ => None,
         };
         self.legs.request(&mut self.agent, req).await?;
-        if let Some((session, answered)) = video {
-            let on = self.legs.video(&session) && answered.unwrap_or(true);
+        if let Some((session, carried, settles)) = video {
+            let on = self.legs.video(&session) && carried;
             if let Some(t) = self.calls.get(&session) {
-                t.video.store(on, std::sync::atomic::Ordering::Relaxed);
+                t.video.store(on, Relaxed);
+                // what was asked for is settled: taken, or not
+                if on {
+                    t.asked.store(crate::VideoAsk::No as u8, Relaxed);
+                } else if settles && t.asked.load(Relaxed) == crate::VideoAsk::Asked as u8 {
+                    t.asked.store(crate::VideoAsk::Refused as u8, Relaxed);
+                }
             }
         }
         Ok(())
@@ -398,6 +441,8 @@ mod legs {
         turn: bool,
         /// Whether it has a video section.
         video: bool,
+        /// Its video section was added for the offer now out: a refusal takes it away again (B§5.2).
+        added_video: bool,
     }
 
     /// Whether an SDP offer or answer carries video: an `m=video` section with a port (B§2.1; port 0 is a refused one).
@@ -451,6 +496,11 @@ mod legs {
             Legs { cfg, turn, turned: None, turn_down_until: 0, legs: HashMap::new(), tx, rx, wake }
         }
 
+        /// Whether the phone's media has a video section, for the legs it makes.
+        pub(super) fn has_video(&self) -> bool {
+            self.cfg.as_ref().is_some_and(|c| c.video.is_some())
+        }
+
         /// Whether `session`'s leg has a video section.
         pub(super) fn video(&self, session: &str) -> bool {
             self.legs.get(session).is_some_and(|l| l.video)
@@ -481,7 +531,7 @@ mod legs {
                     wake.notify_one();
                 }
             });
-            if let Some(old) = self.legs.insert(session.into(), Leg { leg, screening, turn, video }) {
+            if let Some(old) = self.legs.insert(session.into(), Leg { leg, screening, turn, video, added_video: false }) {
                 old.leg.close().await;
             }
             Ok(())
@@ -534,10 +584,16 @@ mod legs {
                         self.open(&session, false, video).await?;
                     }
                     let source = self.cfg.as_ref().map(|c| c.source.clone());
+                    let mine = self.cfg.as_ref().and_then(|c| c.video.clone());
                     let Some(l) = self.legs.get_mut(&session) else { return Ok(()) };
                     if let (true, Some(source)) = (add_source, source) {
                         l.leg.add_source(source).await?; // §14.4 step 3
                         l.screening = false;
+                    }
+                    // B§5.3: video added to a call under way is a section appended to its leg
+                    if let (true, false, false, Some(v)) = (video, l.video, l.screening, mine) {
+                        l.leg.add_video(v).await?;
+                        (l.video, l.added_video) = (true, true);
                     }
                     let sdp = self.describe(&session, Describe::Offer).await?;
                     agent.media(MediaResult::Offer { session, sdp }).await?;
@@ -546,15 +602,30 @@ mod legs {
                     if self.legs.get(&session).is_none_or(|l| screening && !l.screening) {
                         self.open(&session, screening, offers_video(&offer)).await?;
                     }
-                    if !self.legs.contains_key(&session) {
-                        return Ok(());
+                    let mine = self.cfg.as_ref().and_then(|c| c.video.clone());
+                    let Some(l) = self.legs.get_mut(&session) else { return Ok(()) };
+                    // B§5.3: the far end adds video to the call; a phone with video takes it
+                    if let (true, false, false, Some(v)) = (offers_video(&offer), l.video, l.screening, mine) {
+                        l.leg.add_video(v).await?;
+                        l.video = true;
                     }
                     let sdp = self.describe(&session, Describe::Answer(&offer)).await?;
                     agent.media(MediaResult::Answer { session, sdp }).await?;
                 }
                 MediaRequest::ApplyAnswer { session, sdp } => {
-                    if let Some(l) = self.legs.get(&session) {
+                    if let Some(l) = self.legs.get_mut(&session) {
                         l.leg.set_answer(&sdp).await?;
+                        l.added_video = false;
+                    }
+                }
+                MediaRequest::Rollback { session } => {
+                    // B§5.2: the update was refused; the leg is as it was last negotiated
+                    if let Some(l) = self.legs.get_mut(&session) {
+                        l.leg.rollback().await;
+                        if std::mem::take(&mut l.added_video) {
+                            l.leg.drop_video().await;
+                            l.video = false;
+                        }
                     }
                 }
                 MediaRequest::RemoteCandidates { session, candidates } => {
@@ -611,6 +682,7 @@ fn media_session(req: &MediaRequest) -> Option<String> {
         | MediaRequest::RemoteCandidates { session, .. }
         | MediaRequest::StartSending { session }
         | MediaRequest::HoldSending { session }
+        | MediaRequest::Rollback { session }
         | MediaRequest::Close { session } => Some(session.clone()),
         _ => None,
     }

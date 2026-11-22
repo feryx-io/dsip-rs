@@ -661,6 +661,7 @@ async function onMediaRequest(m) {
       case 'remote_candidates': for (const c of m.candidates) await call.media?.addRemoteCandidate(c); break;
       case 'start_sending': await call.media?.resume(); break;   // §14.1: once the signed answer made the call active
       case 'hold_sending': await call.media?.hold(); break;      // C§4: a recording waits on acceptance
+      case 'rollback': await call.media?.rollback(); break;   // B§5.2: our update was refused; the media is as it was
       case 'close': call.media?.close(); call.media = null; break;
       default: log(`media request ${m.kind}: not handled here`);
     }

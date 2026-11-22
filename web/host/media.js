@@ -77,6 +77,11 @@ export class Media {
     await this.flushRemote();
   }
 
+  /** Discard the offer made for an update the far end refused, or that lost a glare (B§5.2, §12.8 rule 5). */
+  async rollback() {
+    if (this.pc.signalingState === 'have-local-offer') await this.pc.setLocalDescription({ type: 'rollback' });
+  }
+
   /** @param {{ candidate: string, sdp_mid?: string, sdp_m_line_index?: number }} c */
   async addRemoteCandidate(c) {
     const cand = { candidate: c.candidate, sdpMid: c.sdp_mid, sdpMLineIndex: c.sdp_m_line_index };
