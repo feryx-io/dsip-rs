@@ -16,7 +16,7 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use serde_json::{json, Value};
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 
 use dsip_broadcast::presence::{Publisher, Watch};
 use dsip_transport::agent::Agent;
@@ -43,6 +43,17 @@ struct Watched {
     due: i64,
     /// Shown in [`crate::Phone::presence`]: the host watches it (not only the own watch, P§12.5).
     shown: bool,
+    /// The last `valid_until` among the grants the subscription presented (P§6); `None`: it presented none.
+    presented_until: Option<i64>,
+}
+
+/// The last `valid_until` among `claims` (the `dsip-grant` claims of a subscribe, P§6).
+fn last_valid_until(claims: &[Value]) -> Option<i64> {
+    claims
+        .iter()
+        .filter_map(|c| dsip_core::b64::decode(c["grant"]["payload"].as_str()?))
+        .filter_map(|p| serde_json::from_slice::<Value>(&p).ok()?["valid_until"].as_i64())
+        .max()
 }
 
 pub(crate) struct Presence {
@@ -54,11 +65,13 @@ pub(crate) struct Presence {
     /// Our siblings' records from the own watch, verified, for the engine to read their epochs (P§12.5).
     siblings: Vec<Value>,
     shown: watch::Sender<BTreeMap<String, crate::Presence>>,
+    /// The shares that ended early, for the host ([`crate::Phone::share_ended`]).
+    ended: mpsc::UnboundedSender<crate::ShareEnded>,
 }
 
 impl Presence {
-    pub(crate) fn new(shown: watch::Sender<BTreeMap<String, crate::Presence>>) -> Presence {
-        Presence { publisher: None, state: None, watched: HashMap::new(), sent: VecDeque::new(), siblings: vec![], shown }
+    pub(crate) fn new(shown: watch::Sender<BTreeMap<String, crate::Presence>>, ended: mpsc::UnboundedSender<crate::ShareEnded>) -> Presence {
+        Presence { publisher: None, state: None, watched: HashMap::new(), sent: VecDeque::new(), siblings: vec![], shown, ended }
     }
 
     /// Whether anything needs the clock: a record to refresh, or a watch.
@@ -86,7 +99,7 @@ impl Presence {
         if agent.presence_sealed(None) {
             // P§12.5: our own identity, admitted by P§6 rule 1, shows the epochs our siblings seal at
             let me = agent.identity_did().to_string();
-            self.watched.entry(me.clone()).or_insert_with(|| Watched { via: None, sub: None, watch: Watch::new(&me), due: 0, shown: false });
+            self.watched.entry(me.clone()).or_insert_with(|| Watched { via: None, sub: None, watch: Watch::new(&me), due: 0, shown: false, presented_until: None });
         }
         for w in self.watched.values_mut().filter(|w| w.via.is_none()) {
             w.due = 0;
@@ -108,7 +121,7 @@ impl Presence {
         if let Some(url) = &via {
             agent.keep_peer(url, true);
         }
-        let old = self.watched.insert(target.clone(), Watched { via, sub: None, watch: Watch::new(&target), due: 0, shown: true });
+        let old = self.watched.insert(target.clone(), Watched { via, sub: None, watch: Watch::new(&target), due: 0, shown: true, presented_until: None });
         if let Some(url) = old.and_then(|o| o.via) {
             self.release(agent, &url);
         }
@@ -189,6 +202,7 @@ impl Presence {
         // P§6: presence is private by default; the grants the target gave us admit us
         let claims = agent.presence_claims(target);
         let grants = claims.len();
+        let presented_until = last_valid_until(&claims);
         if grants > 0 {
             p["claims"] = Value::Array(claims);
         }
@@ -205,6 +219,7 @@ impl Presence {
             // §9.3: a renewal replaces the subscription; the watch follows the new one
             w.sub = Some(sub);
             w.watch = Watch::new(target);
+            w.presented_until = presented_until;
             w.due = now_s() + SUBSCRIBE_S - RENEW_EARLY_S;
         }
     }
@@ -235,6 +250,11 @@ impl Presence {
                     w.sub = None;
                     w.due = now + RETRY_S;
                     let target = target.clone();
+                    // §19.4 "Keeping it" (spec-gap 190): ended by policy while a grant it presented still ran, which
+                    // is all a grantee sees of that grant's revocation (P§7)
+                    if payload["reason"] == "policy.terminated" && w.presented_until.take().is_some_and(|until| until > now) {
+                        let _ = self.ended.send(crate::ShareEnded { identity: target.clone() });
+                    }
                     self.shown.send_if_modified(|m| m.remove(&target).is_some());
                     return true;
                 }

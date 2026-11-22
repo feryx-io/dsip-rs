@@ -197,6 +197,11 @@ async fn withdrawing_a_grant_rotates_the_keys_and_the_other_grantees_get_new_one
     })
     .await
     .expect("Alice no longer sees Bob");
+    // §19.4 (spec-gap 190): Alice is sent no revocation; her watch, which presented the grant, ending by policy
+    // while the grant still ran is how her phone tells its host. Carol's share goes on: nothing for her.
+    let ended = tokio::time::timeout(dsip_testkit::TIMEOUT, alice.share_ended()).await.expect("Alice is told").expect("the phone runs");
+    assert_eq!(ended.identity, bob.identity());
+    assert!(tokio::time::timeout(Duration::from_millis(300), carol.share_ended()).await.is_err(), "Carol's share did not end");
     // Bob's record went again under the new key, which only Carol holds
     bob.set_presence(Some("dnd"));
     let p = until(&carol, bob.identity(), "Bob dnd, under the new key", |p| p.state == "dnd").await;

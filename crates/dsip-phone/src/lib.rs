@@ -157,6 +157,18 @@ pub struct IssuedGrant {
     pub grant: String,
 }
 
+/// A share that ended early: a presence subscription that presented grants held from `identity` was ended by its
+/// authority with `policy.terminated` while one of them had not reached its `valid_until`. That is all a grantee
+/// sees of a grant's revocation, which it is never sent (P§7).
+///
+/// Spec: §19.4 ("Keeping it": the receiver of a grant's profile card stops showing it; spec-gap 190), P§7.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ShareEnded {
+    /// The grantor identity whose presence was watched.
+    pub identity: String,
+}
+
 /// What the phone's task is asked to do.
 #[allow(clippy::large_enum_variant)] // a command is built once and consumed at once, as the agent's events are
 enum Cmd {
@@ -205,6 +217,7 @@ pub struct Phone {
     hints: Option<dsip_transport::hints::HintsClient>,
     incoming: Mutex<mpsc::UnboundedReceiver<IncomingCall>>,
     issued: Mutex<mpsc::UnboundedReceiver<IssuedGrant>>,
+    ended: Mutex<mpsc::UnboundedReceiver<ShareEnded>>,
     presence: watch::Receiver<std::collections::BTreeMap<String, Presence>>,
     identity: String,
     device: String,
@@ -336,6 +349,12 @@ impl Phone {
     /// The next grant the phone issued for the host to deliver ([`IssuedGrant`]); `None` once the phone has closed.
     pub async fn issued_grant(&self) -> Option<IssuedGrant> {
         self.issued.lock().await.recv().await
+    }
+
+    /// The next share that ended early ([`ShareEnded`]): a grant held from that identity was, as far as a grantee can
+    /// tell, revoked. `None` once the phone has closed. Spec: §19.4 (spec-gap 190), P§7.
+    pub async fn share_ended(&self) -> Option<ShareEnded> {
+        self.ended.lock().await.recv().await
     }
 
     /// Our relay's DID, from its verified `hello` (§13.2): what a registration with it names as its waker (W§4.1).
@@ -527,10 +546,11 @@ impl PhoneBuilder {
         let (cmds, cmds_rx) = mpsc::unbounded_channel();
         let (incoming_tx, incoming) = mpsc::unbounded_channel();
         let (issued_tx, issued) = mpsc::unbounded_channel();
+        let (ended_tx, ended) = mpsc::unbounded_channel();
         let (presence_tx, presence) = watch::channel(Default::default());
         let line = Line { cmds, wake: agent.waker() };
-        let task = tokio::spawn(run::Runner::new(agent, cmds_rx, line.clone(), incoming_tx, issued_tx, presence_tx, (self.media, self.turn)).run());
-        Ok(Phone { line, relay_url: home, hints: self.hints, incoming: Mutex::new(incoming), issued: Mutex::new(issued), presence, identity, device,
+        let task = tokio::spawn(run::Runner::new(agent, cmds_rx, line.clone(), incoming_tx, issued_tx, (presence_tx, ended_tx), (self.media, self.turn)).run());
+        Ok(Phone { line, relay_url: home, hints: self.hints, incoming: Mutex::new(incoming), issued: Mutex::new(issued), ended: Mutex::new(ended), presence, identity, device,
                    relay_did, relay_wake, video, task: Mutex::new(Some(task)) })
     }
 }
