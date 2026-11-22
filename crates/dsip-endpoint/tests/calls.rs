@@ -249,6 +249,80 @@ fn an_update_can_be_rejected() {
     pump(&mut a, &mut b);
     b.command(CallCommand::RejectUpdate { session: sid.clone() });
     assert_eq!(b.sent_of("reject").last().map(|r| r["reason"].clone()), Some(json!("media.unsupported")), "{:?}", b.sent_types());
+    // B§5.2: the sender's offer is discarded, and its media is as it was; the call goes on (§12.8 rule 5)
+    assert!(!a.media.contains(&MediaRequest::Rollback { session: sid.clone() }));
+    pump(&mut a, &mut b);
+    assert_eq!(a.media.last(), Some(&MediaRequest::Rollback { session: sid.clone() }), "{:?}", a.media);
+    assert_eq!(a.state(&sid), Some(SessionState::Active));
+    // and it may ask again
+    a.command(CallCommand::Update { session: sid.clone() });
+    assert_eq!(a.sent_of("update").len(), 2);
+}
+
+/// The SDP of a leg with a video section after its audio.
+fn sdp_with_video(setup: &str) -> String {
+    sdp(setup, "sendrecv").replace("a=group:BUNDLE 0", "a=group:BUNDLE 0 1")
+        + "m=video 9 UDP/TLS/RTP/SAVPF 96\r\nc=IN IP4 0.0.0.0\r\na=ice-ufrag:0123456789abcdef0123456789abcdef\r\n\
+a=ice-pwd:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\r\n\
+a=fingerprint:sha-256 AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99\r\n\
+a=setup:SETUP\r\na=mid:1\r\na=sendrecv\r\na=rtcp-mux\r\na=rtpmap:96 H264/90000\r\n\
+a=fmtp:96 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f\r\n".replace("SETUP", setup).as_str()
+}
+
+#[test]
+fn video_is_added_to_an_audio_call_by_an_update_whose_descriptors_follow_its_sdp() {
+    let (mut a, mut b) = pair(AnswerPolicy::Accept);
+    let sid = place(&mut a, &b);
+    pump(&mut a, &mut b);
+    assert_eq!(a.sent_of("invite")[0]["media"].as_array().map(Vec::len), Some(1), "an audio call");
+    (a.auto_media, b.auto_media) = (false, false);
+    // §12.8, B§5.3: the host is asked for an offer with a video section
+    a.command(CallCommand::AddVideo { session: sid.clone() });
+    assert_eq!(a.media.last(), Some(&MediaRequest::Offer { session: sid.clone(), add_source: false, video: true }));
+    // one update outstanding (§12.8 rule 2): asked again before the offer is made, nothing more is asked
+    let asked = a.media.len();
+    a.command(CallCommand::AddVideo { session: sid.clone() });
+    assert_eq!(a.media.len(), asked);
+    a.result(MediaResult::Offer { session: sid.clone(), sdp: sdp_with_video("actpass") });
+    let update = a.sent_of("update")[0].clone();
+    // B§2.1: `media[]` follows the SDP's sections, though this endpoint offers no video in its invites
+    let kinds: Vec<&str> = update["media"].as_array().unwrap().iter().map(|m| m["type"].as_str().unwrap()).collect();
+    assert_eq!(kinds, vec!["audio", "video"], "{update}");
+    assert!(update.get("answered_by").is_none(), "not an escalation from screening");
+    a.command(CallCommand::AddVideo { session: sid.clone() });
+    assert_eq!(a.sent_of("update").len(), 1, "one update outstanding");
+    pump(&mut a, &mut b);
+    assert!(b.events.iter().any(|e| matches!(e, CallEvent::UpdateOffered { .. })), "{:?}", b.events);
+    b.command(CallCommand::AnswerUpdate { session: sid.clone() });
+    assert!(matches!(b.media.last(), Some(MediaRequest::Answer { offer, .. }) if offer.contains("m=video 9")), "{:?}", b.media);
+    b.result(MediaResult::Answer { session: sid.clone(), sdp: sdp_with_video("active") });
+    let answer = b.sent_of("answer").last().unwrap().to_owned().clone();
+    assert_eq!(answer["media"].as_array().map(Vec::len), Some(2), "{answer}");
+    pump(&mut a, &mut b);
+    assert!(a.media.iter().any(|m| matches!(m, MediaRequest::ApplyAnswer { sdp, .. } if sdp.contains("m=video 9"))), "{:?}", a.media);
+    // the call has video now: a later re-offer keeps it
+    a.command(CallCommand::Update { session: sid.clone() });
+    assert_eq!(a.media.last(), Some(&MediaRequest::Offer { session: sid.clone(), add_source: false, video: true }));
+}
+
+#[test]
+fn two_updates_at_once_leave_one_and_the_loser_discards_its_offer() {
+    let (mut a, mut b) = pair(AnswerPolicy::Accept);
+    let sid = place(&mut a, &b);
+    pump(&mut a, &mut b);
+    a.command(CallCommand::Update { session: sid.clone() });
+    b.command(CallCommand::Update { session: sid.clone() });
+    let (ua, ub) = (a.sent_of("update")[0]["id"].as_str().unwrap().to_string(), b.sent_of("update")[0]["id"].as_str().unwrap().to_string());
+    pump(&mut a, &mut b);
+    // §12.8 rule 3: the smaller id proceeds; its sender is offered nothing, the other discards its offer (B§5.2) and
+    // is offered the winner's
+    let (winner, loser, id) = if ua < ub { (&a, &b, ua) } else { (&b, &a, ub) };
+    assert!(!winner.events.iter().any(|e| matches!(e, CallEvent::UpdateOffered { .. })), "{:?}", winner.events);
+    assert!(!winner.media.contains(&MediaRequest::Rollback { session: sid.clone() }));
+    assert!(loser.media.contains(&MediaRequest::Rollback { session: sid.clone() }), "{:?}", loser.media);
+    assert_eq!(loser.events.last(), Some(&CallEvent::UpdateOffered { session: sid.clone(), id }));
+    assert_eq!(loser.sent_of("reject").len(), 0);
+    assert_eq!(winner.sent_of("reject").last().map(|r| r["reason"].clone()), Some(json!("session.glare")));
 }
 
 #[test]

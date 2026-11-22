@@ -63,6 +63,38 @@ struct Video {
     frames_in: AtomicU64,
     frames_out: AtomicU64,
     keyframes_asked: AtomicU64,
+    /// Set when the section is taken away again ([`ForgeLeg::drop_video`]): its sender lets go of the host's feed.
+    gone: tokio::sync::watch::Sender<bool>,
+}
+
+impl Video {
+    fn new(cfg: VideoConfig) -> Arc<Video> {
+        Arc::new(Video {
+            cfg,
+            rtx: std::sync::Mutex::new(RtxCache::new(RTX_PACKETS)),
+            frames_in: AtomicU64::new(0),
+            frames_out: AtomicU64::new(0),
+            keyframes_asked: AtomicU64::new(0),
+            gone: tokio::sync::watch::channel(false).0,
+        })
+    }
+}
+
+/// The video section forge offers or answers for `v` (B§3.4).
+fn forge_video(v: &VideoConfig) -> forge_webrtc::VideoConfig {
+    forge_webrtc::VideoConfig {
+        codecs: v.codecs.iter().filter_map(|id| forge_codec(id)).map(|c| (c, c.default_payload_type())).collect(),
+        direction: match (v.source.is_some(), v.sink.is_some()) {
+            (true, true) => Direction::SendRecv,
+            (true, false) => Direction::SendOnly,
+            (false, true) => Direction::RecvOnly,
+            (false, false) => Direction::Inactive,
+        },
+        // B§3.4 (spec-gap 181): constrained baseline, which every endpoint doing video decodes
+        h264_profile_level_id: "42e01f".into(),
+        max_kbps: v.max_kbps,
+        content: false,
+    }
 }
 
 /// A forge peer connection with one audio track.
@@ -79,7 +111,9 @@ pub struct ForgeLeg {
     sending: Arc<AtomicBool>,
     tap_in: Option<mpsc::UnboundedSender<Bytes>>,
     tap_out: Option<mpsc::UnboundedSender<Bytes>>,
-    video: Option<Arc<Video>>,
+    /// The video section, from the leg's making or added to a call under way ([`ForgeLeg::add_video`]); shared with
+    /// the pump, which reads it when the first video packet comes.
+    video: Arc<std::sync::Mutex<Option<Arc<Video>>>>,
     /// Set when the leg closes; dropped with it. The video sender ends on either, letting go of the host's feed for
     /// the next leg (a host makes every leg from one [`VideoConfig`]).
     closed: tokio::sync::watch::Sender<bool>,
@@ -99,19 +133,7 @@ impl ForgeLeg {
             // Opus only, as before forge offered a codec list: the recorder and the speech checks expect it
             codecs: vec![(AudioCodec::Opus, 111)],
             dtmf: false,
-            video: cfg.video.as_ref().map(|v| forge_webrtc::VideoConfig {
-                codecs: v.codecs.iter().filter_map(|id| forge_codec(id)).map(|c| (c, c.default_payload_type())).collect(),
-                direction: match (v.source.is_some(), v.sink.is_some()) {
-                    (true, true) => Direction::SendRecv,
-                    (true, false) => Direction::SendOnly,
-                    (false, true) => Direction::RecvOnly,
-                    (false, false) => Direction::Inactive,
-                },
-                // B§3.4 (spec-gap 181): constrained baseline, which every endpoint doing video decodes
-                h264_profile_level_id: "42e01f".into(),
-                max_kbps: v.max_kbps,
-                content: false,
-            }),
+            video: cfg.video.as_ref().map(forge_video),
             transport: TransportConfig {
                 turn_servers: cfg
                     .turn
@@ -138,16 +160,13 @@ impl ForgeLeg {
             closed: tokio::sync::watch::channel(false).0,
             tap_in: cfg.tap_in,
             tap_out: cfg.tap_out,
-            video: cfg.video.map(|cfg| {
-                Arc::new(Video {
-                    cfg,
-                    rtx: std::sync::Mutex::new(RtxCache::new(RTX_PACKETS)),
-                    frames_in: AtomicU64::new(0),
-                    frames_out: AtomicU64::new(0),
-                    keyframes_asked: AtomicU64::new(0),
-                })
-            }),
+            video: Arc::new(std::sync::Mutex::new(cfg.video.map(Video::new))),
         })
+    }
+
+    /// The leg's video section, if it has one.
+    fn video(&self) -> Option<Arc<Video>> {
+        self.video.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Forward forge events to the host once the transport exists.
@@ -165,7 +184,10 @@ impl ForgeLeg {
         tokio::spawn(async move {
             let mut rec: Option<Recorder> = None;
             let mut first = true;
-            let mut inbound = video.map(|v| Inbound::new(v, pc));
+            // made when the leg has a video section: from the start, or once one is added to the call
+            let mut inbound: Option<Inbound> = None;
+            let slot = video;
+            let pc_for_video = pc;
             while let Some(ev) = rx.recv().await {
                 match ev {
                     PeerEvent::LocalCandidate(c) => {
@@ -189,7 +211,7 @@ impl ForgeLeg {
                         let _ = tx.send(MediaEvent::State(format!("failed: {why}")));
                     }
                     PeerEvent::VideoRtp(pkt) => {
-                        if let Some(v) = inbound.as_mut() {
+                        if let Some(v) = Inbound::of(&mut inbound, &slot, &pc_for_video) {
                             v.packet(pkt).await;
                         }
                     }
@@ -217,7 +239,7 @@ impl ForgeLeg {
                         }
                     }
                     PeerEvent::Rtcp(packets) => {
-                        if let Some(v) = inbound.as_mut() {
+                        if let Some(v) = Inbound::of(&mut inbound, &slot, &pc_for_video) {
                             v.feedback(&packets).await;
                         }
                     }
@@ -240,6 +262,37 @@ impl ForgeLeg {
         self.source = source;
         self.sending.store(false, Ordering::SeqCst);
         Ok(())
+    }
+
+    /// Add a video section to a leg made without one (B§5.3): the next [`ForgeLeg::create_offer`] offers it, the next
+    /// [`ForgeLeg::accept_offer`] takes one offered. A leg already sending sends the camera once the section is
+    /// negotiated. No-op if it has one.
+    pub async fn add_video(&mut self, cfg: VideoConfig) -> Result<()> {
+        if self.video().is_some() {
+            return Ok(());
+        }
+        self.pc.lock().await.set_video(Some(forge_video(&cfg)));
+        let v = Video::new(cfg);
+        *self.video.lock().unwrap_or_else(|e| e.into_inner()) = Some(v.clone());
+        if self.sending.load(Ordering::SeqCst) && v.cfg.source.is_some() {
+            tokio::spawn(send_video(v, self.pc.clone(), self.sending.clone(), self.closed.subscribe()));
+        }
+        Ok(())
+    }
+
+    /// Take the video section away again, when the offer that added it was refused (B§5.2: the media is as it was
+    /// last negotiated). Its sender ends.
+    pub async fn drop_video(&mut self) {
+        self.pc.lock().await.set_video(None);
+        if let Some(v) = self.video.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            v.gone.send_replace(true);
+        }
+    }
+
+    /// Discard the offer made and not answered (B§5.2): the far end refused the update, or lost to ours (§12.8).
+    /// Nothing to discard is no error.
+    pub async fn rollback(&self) {
+        let _ = self.pc.lock().await.rollback_local_offer();
     }
 
     /// Create an SDP offer (also used for re-offers, §12.8).
@@ -285,7 +338,7 @@ impl ForgeLeg {
         if self.sending.swap(true, Ordering::SeqCst) {
             return;
         }
-        if let Some(v) = self.video.clone().filter(|v| v.cfg.source.is_some()) {
+        if let Some(v) = self.video().filter(|v| v.cfg.source.is_some()) {
             tokio::spawn(send_video(v, self.pc.clone(), self.sending.clone(), self.closed.subscribe()));
         }
         if self.source == Source::None {
@@ -322,9 +375,9 @@ impl ForgeLeg {
             packets_in: self.packets_in.load(Ordering::Relaxed),
             bytes_in: self.bytes_in.load(Ordering::Relaxed),
             frames_out: self.frames_out.load(Ordering::Relaxed),
-            video_frames_in: self.video.as_ref().map_or(0, |v| v.frames_in.load(Ordering::Relaxed)),
-            video_frames_out: self.video.as_ref().map_or(0, |v| v.frames_out.load(Ordering::Relaxed)),
-            keyframes_asked: self.video.as_ref().map_or(0, |v| v.keyframes_asked.load(Ordering::Relaxed)),
+            video_frames_in: self.video().map_or(0, |v| v.frames_in.load(Ordering::Relaxed)),
+            video_frames_out: self.video().map_or(0, |v| v.frames_out.load(Ordering::Relaxed)),
+            keyframes_asked: self.video().map_or(0, |v| v.keyframes_asked.load(Ordering::Relaxed)),
         }
     }
 
@@ -347,9 +400,11 @@ async fn video_sender(pc: &Mutex<PeerConnection>) -> Option<VideoSender> {
 async fn send_video(v: Arc<Video>, pc: Arc<Mutex<PeerConnection>>, sending: Arc<AtomicBool>,
                     mut closed: tokio::sync::watch::Receiver<bool>) {
     let Some(feed) = v.cfg.source.clone() else { return };
+    let mut gone = v.gone.subscribe();
     let mut feed = tokio::select! {
         f = feed.0.lock() => f,
         _ = closed.wait_for(|c| *c) => return,
+        _ = gone.wait_for(|g| *g) => return,
     };
     let mut sender: Option<VideoSender> = None;
     // Impl: the first sequence number is taken from the clock, as RFC 3550 §5.1 asks it not be predictable
@@ -362,6 +417,8 @@ async fn send_video(v: Arc<Video>, pc: Arc<Mutex<PeerConnection>>, sending: Arc<
             },
             // closed, or the leg dropped
             _ = closed.wait_for(|c| *c) => break,
+            // the section taken away again
+            _ = gone.wait_for(|g| *g) => break,
         };
         if !sending.load(Ordering::SeqCst) {
             continue;
@@ -415,6 +472,19 @@ struct Inbound {
 }
 
 impl Inbound {
+    /// The leg's inbound video, made when its section is there: `None` on a leg without video.
+    fn of<'a>(inbound: &'a mut Option<Inbound>, slot: &std::sync::Mutex<Option<Arc<Video>>>, pc: &Arc<Mutex<PeerConnection>>)
+              -> Option<&'a mut Inbound> {
+        let now = slot.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        match now {
+            // the section was taken away again (a refused offer), or another was added since
+            None => *inbound = None,
+            Some(v) if !inbound.as_ref().is_some_and(|i| Arc::ptr_eq(&i.v, &v)) => *inbound = Some(Inbound::new(v, pc.clone())),
+            Some(_) => {}
+        }
+        inbound.as_mut()
+    }
+
     fn new(v: Arc<Video>, pc: Arc<Mutex<PeerConnection>>) -> Inbound {
         Inbound { v, pc, sender: None, assembler: None, gate: KeyframeRequestGate::new(KEYFRAME_INTERVAL),
                   nacked: Default::default(), first: true }

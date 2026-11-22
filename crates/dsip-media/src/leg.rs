@@ -212,6 +212,44 @@ impl MediaLeg {
         dispatch!(self, l => l.add_source(source).await)
     }
 
+    /// Add a video section to a leg made without one (B§5.3: adding video is an `update` whose offer appends an `m=`
+    /// section): the next [`MediaLeg::create_offer`] offers it, the next [`MediaLeg::accept_offer`] takes one offered.
+    /// No-op if the leg has one.
+    ///
+    /// Impl: forge only, as video is ([`Error::VideoUnsupported`] on webrtc-rs).
+    pub async fn add_video(&mut self, video: crate::video::VideoConfig) -> Result<()> {
+        match self {
+            #[cfg(feature = "webrtc-rs")]
+            MediaLeg::WebRtcRs(_) => Err(Error::VideoUnsupported { backend: Backend::WebRtcRs.name() }),
+            #[cfg(feature = "forge")]
+            MediaLeg::Forge(l) => l.add_video(video).await,
+        }
+    }
+
+    /// Take away the video section [`MediaLeg::add_video`] added, when the offer that carried it was refused (B§5.2:
+    /// the media path is the last negotiated one).
+    pub async fn drop_video(&mut self) {
+        match self {
+            #[cfg(feature = "webrtc-rs")]
+            MediaLeg::WebRtcRs(_) => {}
+            #[cfg(feature = "forge")]
+            MediaLeg::Forge(l) => l.drop_video().await,
+        }
+    }
+
+    /// Discard the offer made and not answered: the update was rejected, or lost a glare (B§5.2, §12.8 rule 5).
+    ///
+    /// Impl: forge only; a webrtc-rs leg keeps its offer (it is the reference peer of one test, and re-offers nothing
+    /// after a refusal there).
+    pub async fn rollback(&self) {
+        match self {
+            #[cfg(feature = "webrtc-rs")]
+            MediaLeg::WebRtcRs(_) => {}
+            #[cfg(feature = "forge")]
+            MediaLeg::Forge(l) => l.rollback().await,
+        }
+    }
+
     /// Create an SDP offer (also used for re-offers, §12.8).
     pub async fn create_offer(&self) -> Result<String> {
         dispatch!(self, l => l.create_offer().await)

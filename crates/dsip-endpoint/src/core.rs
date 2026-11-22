@@ -1349,10 +1349,11 @@ impl Core {
                 }
             }
             "update" => {
-                // Escalation offer (§14.4 step 3): full sendrecv from this sender; video only when this
-                // endpoint actually offers it, so the descriptors match the SDP the media leg re-offers
-                // (WebRTC Media Binding B§2.1).
-                let offer = self.media_offer(self.cfg.video);
+                // A full re-offer (§12.8 rule 1, B§5.1): sendrecv from this sender, with video when the SDP the media
+                // leg re-offers has a video section, so the descriptors match it (B§2.1); without SDP, when this
+                // endpoint offers video.
+                let video = self.pending_sdp.as_deref().map_or(self.cfg.video, carries_video);
+                let offer = self.media_offer(video);
                 self.offers.insert(id.clone(), offer.clone());
                 p["media"] = offer["media"].clone();
                 p["transports"] = offer["transports"].clone();
@@ -1382,6 +1383,11 @@ impl Core {
         // The device signs; its delegation rides in the header so peers can learn and verify the identity (spec-gap 8).
         Ok(sign_bytes(&serde_json::to_vec(&p)?, &self.keys.device, &self.keys.device.kid(), vec![self.keys.delegation.clone()]))
     }
+}
+
+/// Whether an SDP offer or answer carries video: an `m=video` section with a port (B§2.1: port 0 is a refused one).
+pub(crate) fn carries_video(sdp: &str) -> bool {
+    sdp.lines().any(|l| l.strip_prefix("m=video ").is_some_and(|rest| !rest.starts_with("0 ")))
 }
 
 /// The grantor of a grant we hold.
