@@ -22,6 +22,10 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
   extensions in a hint's own `dsip.extensions`; a verified `dsip_dht::record::Hint` carries them (`extensions`);
   `DidDocument` reads `dsipExtensions`; `dsip_messenger::Messenger::peer_lists` answers from the document, else
   from the hint. **Breaking:** `Hint` and `DidDocument` have a new field.
+- A grantee learns that a grant was revoked (DSIP spec-gap 190). `dsip_phone::Phone::share_ended` gives a
+  `ShareEnded` when a presence subscription that presented grants held from an identity is ended with
+  `policy.terminated` while one of them still ran: all a grantee sees of a revocation, and when the receiver of a
+  grant's profile card stops showing it (§19.4). `spec/` moves to DSIP 25ebeff.
 
 ## [2026-11-15.1] — workspace release
 

@@ -65,7 +65,9 @@ struct Batch {
 
 impl Runner {
     pub(crate) fn new(agent: Agent, cmds: mpsc::UnboundedReceiver<Cmd>, line: Line, incoming: mpsc::UnboundedSender<IncomingCall>,
-                      issued: mpsc::UnboundedSender<IssuedGrant>, presence: watch::Sender<std::collections::BTreeMap<String, crate::Presence>>, (media, turn): (Media, Option<dsip_transport::turn::TurnClient>)) -> Runner {
+                      issued: mpsc::UnboundedSender<IssuedGrant>,
+                      (presence, ended): (watch::Sender<std::collections::BTreeMap<String, crate::Presence>>, mpsc::UnboundedSender<crate::ShareEnded>),
+                      (media, turn): (Media, Option<dsip_transport::turn::TurnClient>)) -> Runner {
         #[cfg(not(feature = "media"))]
         let _ = (media, turn);
         Runner {
@@ -77,7 +79,7 @@ impl Runner {
             incoming,
             issued,
             calls: HashMap::new(),
-            presence: Presence::new(presence),
+            presence: Presence::new(presence, ended),
             requests: HashMap::new(),
             ticker: None,
         }
