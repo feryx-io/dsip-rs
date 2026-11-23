@@ -33,6 +33,8 @@ echo "  rebound from $NEW, replacing $OLD"
 plain | grep >/dev/null "$OLD: replaced connection" || fail "the relay did not close the replaced connection"
 echo "  the relay closed $OLD as replaced"
 ! grep -q "reconnected" "$D/second.log" || fail "the new connection was dropped with the old one and had to reconnect"
+# the relay logs the unbind when it reads the close, which may be after the process that closed has exited
+for _ in $(seq 1 40); do plain | grep >/dev/null ": unbound" && break; sleep 0.25; done
 [ "$(plain | grep -c ": unbound")" -eq 1 ] || fail "expected one unbind (the second process quitting), got: $(plain | grep unbound)"
 plain | grep >/dev/null "$NEW: unbound" || fail "the unbind was not the new connection's"
 echo "  the new connection stayed bound until it quit: one unbind, no reconnect"

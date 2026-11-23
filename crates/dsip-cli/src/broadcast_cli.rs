@@ -185,6 +185,13 @@ pub async fn subscribe(c: &Conn, target: &str, events: Vec<String>, expires_in: 
         };
         for ev in events {
             match ev {
+                // §9.3: a notify is of the subscription it names, and `seq` orders that subscription's alone. One of an
+                // earlier subscription of ours, kept for us while we were away (§13.2 store-and-forward), is not this
+                // one's: counted as this one's, its larger `seq` made every notify after it look stale.
+                AgentEvent::Received { message, payload, .. } if message.msg_type == "notify" && payload["subscription"].as_str() != Some(sub_id.as_str()) => {
+                    let of = payload["subscription"].as_str().unwrap_or("");
+                    println!("· dropped notify seq {} of another subscription (…{})   §9.3", payload["seq"], &of[of.len().saturating_sub(8)..]);
+                }
                 AgentEvent::Received { message, identity, payload, .. } if message.msg_type == "notify" => {
                     let seq = payload["seq"].as_u64().unwrap_or(0);
                     if seq <= seq_seen {
