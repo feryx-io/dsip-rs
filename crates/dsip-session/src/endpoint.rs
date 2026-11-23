@@ -31,6 +31,9 @@ pub const T_RING_LOCAL: (i64, i64, i64) = (120, 30, 300);
 pub const T_PRESENCE_ROTATE: (i64, i64, i64) = (60, 0, 3600);
 /// Consecutive re-queue limit. Spec: §12.10 (RECOMMENDED: 3).
 pub const MAX_CONSECUTIVE_REQUEUES: u32 = 3;
+/// An `update`'s validity, seconds, unless its sender chooses another (§12.9): unanswered at its end, it lapses
+/// (§12.8 rule 7).
+pub const UPDATE_VALIDITY_S: i64 = 30;
 
 fn clamp(v: i64, (_, lo, hi): (i64, i64, i64)) -> i64 {
     v.clamp(lo, hi)
@@ -101,6 +104,8 @@ pub struct Session {
     pub answered_device: Option<String>,
     /// Outstanding update, if any.
     pub outstanding: Option<Outstanding>,
+    /// The outstanding update's `expires_at`: unanswered then, it lapses (§12.8 rule 7).
+    pub update_expires_at: i64,
     cancelled: bool,
     was_active: bool,
     post_answer_seen: bool,
@@ -118,6 +123,7 @@ impl Session {
             invite_expires_at: None,
             answered_device: None,
             outstanding: None,
+            update_expires_at: 0,
             cancelled: false,
             was_active: false,
             post_answer_seen: false,
@@ -414,6 +420,7 @@ impl Endpoint {
         let mut v: Vec<i64> = self.timers.iter().map(|t| t.deadline).collect();
         v.extend(self.contacts.grants_issued.values().filter(|g| !g.keys.is_empty() && !g.ended).map(|g| g.valid_until));
         v.extend(self.keys.due.values().copied());
+        v.extend(self.sessions.values().filter(|s| s.outstanding.is_some()).map(|s| s.update_expires_at));
         v
     }
 
@@ -509,7 +516,8 @@ impl Endpoint {
     // ------------------------------------------------------------ clock
 
     /// Advance the clock. Instants are taken in order: at each, the due timers fire in deadline order (ties by start
-    /// order), then the keyed grants whose `valid_until` it is end, in id order, then the scopes due rotate (P§12.5).
+    /// order), then the updates whose `expires_at` it is lapse, in session id order (§12.8 rule 7), then the keyed
+    /// grants whose `valid_until` it is end, in id order, then the scopes due rotate (P§12.5).
     pub fn advance(&mut self, seconds: i64) {
         let target = self.now + seconds;
         while let Some(at) = self.instants().into_iter().filter(|t| *t <= target).min() {
@@ -517,6 +525,22 @@ impl Endpoint {
             while let Some(t) = self.timers.iter().filter(|t| t.deadline <= self.now).min_by_key(|t| (t.deadline, t.seq)).cloned() {
                 self.timers.retain(|x| x.seq != t.seq);
                 self.fire(&t);
+            }
+            // §12.8 rule 7 (spec-gap 191): an update neither answered nor rejected at its expires_at is no longer
+            // outstanding. Its sender treats it as rejected, `session.expired`; its receiver may no longer answer it.
+            let mut lapsing: Vec<(String, Direction)> = self
+                .sessions
+                .values()
+                .filter(|s| s.update_expires_at <= self.now)
+                .filter_map(|s| s.outstanding.as_ref().map(|o| (s.id.clone(), o.direction)))
+                .collect();
+            lapsing.sort_by(|a, b| a.0.cmp(&b.0));
+            for (sid, direction) in lapsing {
+                self.sessions.get_mut(&sid).expect("exists").outstanding = None;
+                self.ui(match direction {
+                    Direction::Outbound => UiEvent::UpdateRejected { reason: "session.expired".into() },
+                    Direction::Inbound => UiEvent::UpdateLapsed,
+                });
             }
             // P§12.5: a share reaching its valid_until (spec-gap 141: at that instant) ends
             let ending: Vec<String> = self
@@ -887,7 +911,7 @@ impl Endpoint {
                     self.emit(Emission::Refused(Refusal::InvalidState));
                 }
             }
-            LocalEvent::Update { id, answered_by, .. } => {
+            LocalEvent::Update { id, answered_by, validity, .. } => {
                 if s.state != SessionState::Active {
                     self.emit(Emission::Refused(Refusal::InvalidState));
                 } else if s.outstanding.is_some() {
@@ -901,8 +925,10 @@ impl Endpoint {
                         answered_by: answered_by.clone(),
                         ..Default::default()
                     });
-                    self.sessions.get_mut(&sid).expect("exists").outstanding =
-                        Some(Outstanding { id: id.clone(), direction: Direction::Outbound });
+                    let s = self.sessions.get_mut(&sid).expect("exists");
+                    s.outstanding = Some(Outstanding { id: id.clone(), direction: Direction::Outbound });
+                    // §12.9: the update's validity, 30 s unless the host names one
+                    s.update_expires_at = self.now + validity.unwrap_or(UPDATE_VALIDITY_S);
                 }
             }
             LocalEvent::AnswerUpdate { in_reply_to, .. } | LocalEvent::RejectUpdate { in_reply_to, .. } => {
@@ -1334,8 +1360,11 @@ impl Endpoint {
                 }
             }
         }
-        self.sessions.get_mut(&sid).expect("exists").outstanding =
-            Some(Outstanding { id: m.id.clone(), direction: Direction::Inbound });
+        let now = self.now;
+        let s = self.sessions.get_mut(&sid).expect("exists");
+        s.outstanding = Some(Outstanding { id: m.id.clone(), direction: Direction::Inbound });
+        // Impl: a trace's `update` may leave `expires_at` out; it is then 30 s after its receipt (vectors README).
+        s.update_expires_at = m.expires_at.unwrap_or(now + UPDATE_VALIDITY_S);
         self.ui(UiEvent::UpdateOffered);
         if let Some(ab) = &m.answered_by {
             // §14.4 step 3: escalation signal

@@ -36,6 +36,15 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
   `UpdateOffered` for the update it rejected. **Changed:** `dsip-phone` answers the far end's `update` (it left
   them unanswered); a phone with video takes video added by the far end, and its application decides whether its
   own camera sends. **Breaking:** `CallCommand` and `MediaRequest` have a new variant each.
+- An update never answered lapses at its `expires_at` (§12.8 rule 7, DSIP spec-gap 191). `dsip_session` ends the
+  outstanding update at that instant: its sender gets `UiEvent::UpdateRejected` with `session.expired`, its
+  receiver the new `UiEvent::UpdateLapsed`; `LocalEvent::Update` takes a `validity` (30 s by default,
+  `UPDATE_VALIDITY_S`). `dsip_endpoint::Calls` rolls the lapsed offer back (`MediaRequest::Rollback`), tells the
+  application of a peer's lapsed update (`CallEvent::UpdateLapsed`), no longer applies an `answer` that names no
+  outstanding update of ours, and a call whose video was refused is an audio call again for its next re-offer. With
+  `dsip-phone`, `Call::video_ask` becomes `Refused` when the peer never answers. Not done: the new `update` the
+  rule says a sender SHOULD send after discarding a late answer. **Breaking:** `LocalEvent::Update` has a new
+  field, `UiEvent` and `CallEvent` a new variant, `Session` a new public field. `spec/` moves to DSIP cc54268.
 
 ## [2026-11-15.1] — workspace release
 

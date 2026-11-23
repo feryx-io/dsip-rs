@@ -722,7 +722,7 @@ impl Core {
             }
             Command::Update { session, id, answered_by, sdp } => {
                 self.pending_sdp = sdp;
-                LocalEvent::Update { session, id, answered_by }
+                LocalEvent::Update { session, id, answered_by, validity: None }
             }
             Command::AnswerUpdate { session, in_reply_to, answered_by, sdp } => {
                 self.pending_sdp = sdp;

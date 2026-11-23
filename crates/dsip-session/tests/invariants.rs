@@ -26,7 +26,7 @@ fn arb_event() -> impl Strategy<Value = Event> {
         Just(Event::Local(LocalEvent::PlaceCall { session: SID.into(), to: BOB.into() })),
         Just(Event::Local(LocalEvent::Cancel { session: SID.into() })),
         Just(Event::Local(LocalEvent::Hangup { session: SID.into(), reason: None })),
-        ids.clone().prop_map(|id| Event::Local(LocalEvent::Update { session: SID.into(), id: id.into(), answered_by: None })),
+        ids.clone().prop_map(|id| Event::Local(LocalEvent::Update { session: SID.into(), id: id.into(), answered_by: None, validity: None })),
         ids.clone().prop_map(|id| Event::Local(LocalEvent::AnswerUpdate { session: SID.into(), in_reply_to: id.into(), answered_by: None })),
         Just(Event::Local(LocalEvent::Info { session: SID.into() })),
         (ids.clone(), devs.clone()).prop_map(|(id, d)| Event::Recv { recv: Message { status: Some("ringing".into()), ..msg("progress", id, d) } }),

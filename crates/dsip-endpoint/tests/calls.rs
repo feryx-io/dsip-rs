@@ -305,6 +305,62 @@ fn video_is_added_to_an_audio_call_by_an_update_whose_descriptors_follow_its_sdp
     assert_eq!(a.media.last(), Some(&MediaRequest::Offer { session: sid.clone(), add_source: false, video: true }));
 }
 
+/// The clock reaches `now`: what the glue does about it.
+fn tick(side: &mut Side, now: i64) {
+    let events = side.core.tick(now).unwrap();
+    let out = side.calls.observe(&mut side.core, events, now).unwrap();
+    side.take(out);
+}
+
+#[test]
+fn an_update_never_answered_lapses_at_its_expiry_and_its_late_answer_is_not_applied() {
+    let (mut a, mut b) = pair(AnswerPolicy::Accept);
+    let sid = place(&mut a, &b);
+    pump(&mut a, &mut b);
+    (a.auto_media, b.auto_media) = (false, false);
+    a.command(CallCommand::AddVideo { session: sid.clone() });
+    a.result(MediaResult::Offer { session: sid.clone(), sdp: sdp_with_video("actpass") });
+    pump(&mut a, &mut b);
+    // §12.8 rule 7: a second before its expires_at the update is outstanding still
+    tick(&mut a, NOW + 29);
+    assert!(!a.media.contains(&MediaRequest::Rollback { session: sid.clone() }), "{:?}", a.media);
+    assert!(a.core.endpoint().session(&sid).unwrap().renegotiating());
+    // at it, it is treated as rejected: the offer is discarded (B§5.2) and the call goes on as it was
+    tick(&mut a, NOW + 30);
+    assert_eq!(a.media.last(), Some(&MediaRequest::Rollback { session: sid.clone() }));
+    assert_eq!(a.state(&sid), Some(SessionState::Active));
+    assert!(!a.core.endpoint().session(&sid).unwrap().renegotiating());
+    // an answer sent in time that arrives after it is not applied
+    b.command(CallCommand::AnswerUpdate { session: sid.clone() });
+    b.result(MediaResult::Answer { session: sid.clone(), sdp: sdp_with_video("active") });
+    pump(&mut a, &mut b);
+    assert!(!a.media.iter().any(|m| matches!(m, MediaRequest::ApplyAnswer { sdp, .. } if sdp.contains("m=video 9"))), "{:?}", a.media);
+    // the call is an audio call again: a later re-offer asks for no video, and may be sent
+    a.command(CallCommand::Update { session: sid.clone() });
+    assert_eq!(a.media.last(), Some(&MediaRequest::Offer { session: sid.clone(), add_source: false, video: false }));
+}
+
+#[test]
+fn an_update_not_answered_by_its_expiry_can_no_longer_be_answered() {
+    let (mut a, mut b) = pair(AnswerPolicy::Accept);
+    let sid = place(&mut a, &b);
+    pump(&mut a, &mut b);
+    (a.auto_media, b.auto_media) = (false, false);
+    a.command(CallCommand::AddVideo { session: sid.clone() });
+    a.result(MediaResult::Offer { session: sid.clone(), sdp: sdp_with_video("actpass") });
+    let id = a.sent_of("update")[0]["id"].as_str().unwrap().to_string();
+    pump(&mut a, &mut b);
+    tick(&mut b, NOW + 29);
+    assert!(!b.events.iter().any(|e| matches!(e, CallEvent::UpdateLapsed { .. })), "{:?}", b.events);
+    // §12.8 rule 7: at the update's expires_at the application is told, and an answer is no longer made
+    tick(&mut b, NOW + 30);
+    assert_eq!(b.events.last(), Some(&CallEvent::UpdateLapsed { session: sid.clone(), id }));
+    let asked = b.media.len();
+    b.command(CallCommand::AnswerUpdate { session: sid.clone() });
+    assert_eq!(b.media.len(), asked, "{:?}", b.media);
+    assert_eq!(b.sent_of("answer").len(), 1, "the invite's answer only");
+}
+
 #[test]
 fn two_updates_at_once_leave_one_and_the_loser_discards_its_offer() {
     let (mut a, mut b) = pair(AnswerPolicy::Accept);
