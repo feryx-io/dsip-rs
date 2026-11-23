@@ -7,6 +7,10 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+- **Fix:** `Phone::close` no longer waits forever when the relay is away. The agent redials a lost connection for as
+  long as it runs (§13.2), and a wake is not heard meanwhile, so the phone's task never read the close. New in
+  `dsip-transport`: `Agent::closer` and `agent::Closer`, by which a host says it is closing, and `Error::Closing`,
+  which `Agent::next` and a send return when the connection is lost and the host is closing. `Phone::close` uses it.
 - Profile cards, the extension `profile-card/1.0` (DSIP spec-gap 186): `dsip_core::profile_card` (the card's rules,
   the 16,384-byte cap of an introduction that carries `sealed` and lists the extension), and in
   `dsip_messaging::first_contact` `seal_introduction_with_card`, `seal_grant_profile`, `open_grant_profile`,

@@ -200,6 +200,8 @@ const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 struct Line {
     cmds: mpsc::UnboundedSender<Cmd>,
     wake: Arc<Notify>,
+    /// Ends the agent's redialling of a lost connection, which a wake does not.
+    closer: dsip_transport::agent::Closer,
 }
 
 impl Line {
@@ -399,11 +401,18 @@ impl Phone {
         self.incoming.lock().await.recv().await
     }
 
-    /// Unbind and stop. Calls still up end `transport.closed` on this side.
+    /// Unbind and stop. Calls still up end `transport.closed` on this side. A phone whose relay is away stops
+    /// redialling it (§13.2) and closes as promptly.
     pub async fn close(&self) -> Result<()> {
         self.line.send(Cmd::Close);
+        // a phone whose relay is away is redialling it, and would not read the command
+        self.line.closer.close();
         match self.task.lock().await.take() {
-            Some(task) => task.await.map_err(|_| Error::Closed)?,
+            Some(task) => match task.await.map_err(|_| Error::Closed)? {
+                // whatever it was sending when the relay was away and it was told to close
+                Err(Error::Transport(dsip_transport::Error::Closing)) => Ok(()),
+                closed => closed,
+            },
             None => Ok(()),
         }
     }
@@ -548,7 +557,7 @@ impl PhoneBuilder {
         let (issued_tx, issued) = mpsc::unbounded_channel();
         let (ended_tx, ended) = mpsc::unbounded_channel();
         let (presence_tx, presence) = watch::channel(Default::default());
-        let line = Line { cmds, wake: agent.waker() };
+        let line = Line { cmds, wake: agent.waker(), closer: agent.closer() };
         let task = tokio::spawn(run::Runner::new(agent, cmds_rx, line.clone(), incoming_tx, issued_tx, (presence_tx, ended_tx), (self.media, self.turn)).run());
         Ok(Phone { line, relay_url: home, hints: self.hints, incoming: Mutex::new(incoming), issued: Mutex::new(issued), ended: Mutex::new(ended), presence, identity, device,
                    relay_did, relay_wake, video, task: Mutex::new(Some(task)) })
