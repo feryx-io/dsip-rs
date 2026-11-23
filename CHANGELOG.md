@@ -7,6 +7,10 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+- **Fix:** `Agent::next` advances the engine's clock before a wake returns from it. A host that woke it more often
+  than its timers were due kept them from firing until a frame happened to arrive: a phone publishing presence wakes
+  its agent every second, so an update's lapse (§12.8 rule 7), T-Ring or T-Establish (§12.10) came late or, on a
+  quiet connection, not at all. Seen as an asking for video that stayed "asking" well past its 30 s.
 - `dsip subscribe` and `dsip presence watch` drop a `notify` of another subscription (§9.3) instead of counting its
   `seq` as their own: one kept for the device from an earlier subscription made every later notify look stale, which
   is how the presence demo failed now and then. The relay-rebind demo waits for the relay to log the unbind.

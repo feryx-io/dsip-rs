@@ -171,3 +171,33 @@ async fn a_send_on_a_connection_that_died_unnoticed_goes_on_a_new_one() {
     bob.command(CallCommand::Accept { session: sid.clone() }).await;
     alice.until(&sid, SessionState::Active).await;
 }
+
+/// A host that wakes its agent often (a phone publishing presence does, every second) still has the engine's timers
+/// run: a wake returns from `Agent::next` after the clock was advanced, not instead of it. Here the caller's
+/// T-Establish (§12.10) ends a call that gets no response, while nothing arrives for it: the callee's device is bound
+/// and never driven.
+#[tokio::test]
+async fn a_timer_fires_in_an_agent_that_is_woken_all_the_time() {
+    let net = Network::new();
+    let mut alice = net.connect(net.identity("Alice"), dsip_transport::agent::AgentConfig { t_establish: Some(5), ..net.config() }).await;
+    let bob = net.device("Bob").await;
+    let wake = alice.waker();
+    let waking = tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            wake.notify_one();
+        }
+    });
+
+    let sid = alice.call(&bob.identity()).await;
+    let placed = std::time::Instant::now();
+    tokio::time::timeout(std::time::Duration::from_secs(9), async {
+        while alice.endpoint().session(&sid).map(|s| s.state) != Some(SessionState::Ended) {
+            alice.agent.next().await.expect("next");
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("T-Establish had not fired {:?} on", placed.elapsed()));
+    assert!(placed.elapsed() >= std::time::Duration::from_secs(4), "T-Establish fired {:?} on", placed.elapsed());
+    waking.abort();
+}
