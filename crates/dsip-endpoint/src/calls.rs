@@ -616,6 +616,7 @@ impl Calls {
                 }
                 if call.updating {
                     call.video = call.video_before;
+                    call.update_out = None;
                 }
                 if std::mem::take(&mut call.updating) && media {
                     // ours lost: its offer is discarded before theirs is answered (B§5.2)
@@ -630,15 +631,24 @@ impl Calls {
             // §12.8 rule 5: our update refused; the session, and the media, stay as they were
             "reject" | "error" if call.updating && core.endpoint().session(sid).is_some_and(|s| s.state == SessionState::Active && s.outstanding.is_none()) => {
                 call.updating = false;
+                call.update_out = None;
                 call.video = call.video_before;
                 if media {
                     out.push(CallOut::Media(MediaRequest::Rollback { session: sid.to_string() }));
                 }
             }
-            // §12.8 rule 7: the answer to an update that lapsed, or that was never ours, is not applied
-            "answer" if payload.get("in_reply_to").is_some() && (!call.updating || payload["in_reply_to"].as_str() != call.update_out.as_deref()) => {}
+            // §12.8 rule 7: the answer to an update that lapsed, or that was never ours, is not applied. The one to
+            // ours that lapsed (`update_out` is kept by a lapse alone) was applied by its sender, so the two sides
+            // differ about the media: a new update is sent to make them agree again (SHOULD), once.
+            "answer" if payload.get("in_reply_to").is_some() && (!call.updating || payload["in_reply_to"].as_str() != call.update_out.as_deref()) => {
+                if !call.updating && call.update_out.is_some() && payload["in_reply_to"].as_str() == call.update_out.as_deref() {
+                    call.update_out = None;
+                    out.extend(self.update(core, sid.to_string(), false, false, now)?);
+                }
+            }
             "answer" => {
                 call.updating = false;
+                call.update_out = None;
                 if let (true, Some(sdp)) = (media, remote_sdp) {
                     out.push(CallOut::Media(MediaRequest::ApplyAnswer { session: sid.to_string(), sdp }));
                 }
