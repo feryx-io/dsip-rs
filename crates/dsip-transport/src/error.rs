@@ -104,6 +104,9 @@ pub enum Error {
         /// The relay's DID.
         relay: String,
     },
+    /// The host is closing the agent ([`crate::agent::Closer`]) while its connection is lost: it is not redialled.
+    #[error("the agent is closing: its relay is not redialled")]
+    Closing,
 }
 
 /// How the `hello` exchange failed (§13.2, §20.5).

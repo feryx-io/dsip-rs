@@ -162,6 +162,8 @@ pub struct Agent {
     replaced_closed: bool,
     /// Wakes [`Agent::next`] for the host ([`Agent::waker`]).
     wake: Arc<tokio::sync::Notify>,
+    /// Set once the host is closing the agent ([`Agent::closer`]): a lost connection is no longer redialled.
+    stop: Arc<tokio::sync::watch::Sender<bool>>,
     /// Connections to other relays, by URL: this device bound there for the calls placed through them (§8.1).
     peers: std::collections::HashMap<String, Connection>,
     /// The sessions placed through another relay: its URL, when the route was made, and whether the session has been
@@ -213,7 +215,7 @@ impl Agent {
         let (resolved_tx, resolved_rx) = mpsc::unbounded_channel();
         let calls = cfg.calls.map(Calls::new);
         Ok(Agent { id, cfg, supported, resolver, conn, core, calls, events: vec![], did_resolver, resolved_tx, resolved_rx, replaced: false, replaced_closed: false,
-                   wake: Arc::new(tokio::sync::Notify::new()), peers: Default::default(), routes: Default::default(),
+                   wake: Arc::new(tokio::sync::Notify::new()), stop: Arc::new(tokio::sync::watch::channel(false).0), peers: Default::default(), routes: Default::default(),
                    kept: Default::default(), awaiting: Default::default() })
     }
 
@@ -679,6 +681,13 @@ impl Agent {
         Arc::clone(&self.wake)
     }
 
+    /// A handle by which the host says it is closing the agent. A wake ([`Agent::waker`]) is heard only while
+    /// [`Agent::next`] waits, not while it redials a lost connection, which goes on for as long as the relay is away
+    /// (§13.2): a host that asked its own task to stop by a wake alone would wait as long.
+    pub fn closer(&self) -> Closer {
+        Closer { stop: Arc::clone(&self.stop), wake: Arc::clone(&self.wake) }
+    }
+
     /// Wait for the next thing to happen (inbound frame, timer, connection loss, or a [`Agent::waker`] wake) and
     /// return the accumulated application events. Reconnects with backoff on connection loss.
     pub async fn next(&mut self) -> Result<Vec<AgentEvent>> {
@@ -779,11 +788,22 @@ impl Agent {
         let (mut delay, factor, max) = BACKOFF;
         let mut attempts = 0u32;
         let mut seen = SeenIds::default();
+        let mut stop = self.stop.subscribe();
         loop {
             attempts += 1;
             let jitter = Duration::from_millis((now_s() as u64 * 7919 + attempts as u64 * 104_729) % (delay * 1000));
-            tokio::time::sleep(jitter).await;
-            match Connection::dial(self.cfg.dialer.as_deref(), &Self::params(&self.id, &self.cfg, &self.supported), &self.resolver, &mut seen).await {
+            let dial = async {
+                tokio::time::sleep(jitter).await;
+                let params = Self::params(&self.id, &self.cfg, &self.supported);
+                Connection::dial(self.cfg.dialer.as_deref(), &params, &self.resolver, &mut seen).await
+            };
+            // Impl: a host that is closing waits on neither the backoff nor a dial that may never be answered
+            let dialled = tokio::select! {
+                biased;
+                _ = async { let _ = stop.wait_for(|closing| *closing).await; } => return Err(crate::Error::Closing),
+                dialled = dial => dialled,
+            };
+            match dialled {
                 Ok(c) => {
                     self.conn = c;
                     self.core.set_authority(Some(self.conn.relay.did.clone()));
@@ -796,6 +816,25 @@ impl Agent {
                 }
             }
         }
+    }
+}
+
+/// The host's word that it is closing an [`Agent`] ([`Agent::closer`]).
+///
+/// Spec: none (infrastructure)
+#[derive(Clone)]
+pub struct Closer {
+    stop: Arc<tokio::sync::watch::Sender<bool>>,
+    wake: Arc<tokio::sync::Notify>,
+}
+
+impl Closer {
+    /// The agent is closing: [`Agent::next`] returns, with [`crate::Error::Closing`] if it was redialling a lost
+    /// connection, and so does whatever sends on one. The connection the agent has is left as it is, for
+    /// [`Agent::close`].
+    pub fn close(&self) {
+        self.stop.send_replace(true);
+        self.wake.notify_one();
     }
 }
 

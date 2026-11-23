@@ -411,3 +411,44 @@ async fn video_asked_of_a_phone_without_it_is_refused_and_the_call_goes_on() {
     call.hang_up();
     assert_eq!(within("bye at Bob", theirs.ended()).await, "user.hangup");
 }
+
+/// A dialer whose relay can go away: the streams it gave are cut, and it refuses to dial.
+struct Cut {
+    to: std::sync::Arc<dyn dsip_transport::conn::Dialer>,
+    down: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    cut: std::sync::Arc<tokio::sync::Notify>,
+}
+
+impl dsip_transport::conn::Dialer for Cut {
+    fn dial(&self) -> dsip_transport::conn::DialFuture {
+        if self.down.load(std::sync::atomic::Ordering::Relaxed) {
+            return Box::pin(async { Err(std::io::Error::from(std::io::ErrorKind::ConnectionRefused)) });
+        }
+        let (dial, cut) = (self.to.dial(), std::sync::Arc::clone(&self.cut));
+        Box::pin(async move {
+            let mut far = dial.await?;
+            let (ours, mut near) = tokio::io::duplex(1 << 17);
+            tokio::spawn(async move {
+                tokio::select! {
+                    _ = tokio::io::copy_bidirectional(&mut far, &mut near) => {}
+                    _ = cut.notified() => {}
+                }
+            });
+            Ok(Box::new(ours) as Box<dyn dsip_transport::conn::Io>)
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_phone_whose_relay_is_gone_still_closes() {
+    let net = Network::new();
+    let (down, cut) = (std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), std::sync::Arc::new(tokio::sync::Notify::new()));
+    let dialer = Cut { to: net.dialer(), down: std::sync::Arc::clone(&down), cut: std::sync::Arc::clone(&cut) };
+    let alice = Phone::builder().identity(net.identity("Alice")).dialer(std::sync::Arc::new(dialer)).build().await.expect("phone");
+    // the relay goes: the connection is lost, and no new one can be made
+    down.store(true, std::sync::atomic::Ordering::Relaxed);
+    cut.notify_waiters();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    // §13.2: the phone redials with backoff for as long as it runs; closing it ends that
+    tokio::time::timeout(Duration::from_secs(2), alice.close()).await.expect("the phone closes while its relay is away").expect("closed");
+}

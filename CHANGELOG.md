@@ -7,6 +7,10 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+- **Fix:** `Phone::close` no longer waits forever when the relay is away. The agent redials a lost connection for as
+  long as it runs (§13.2), and a wake is not heard meanwhile, so the phone's task never read the close. New in
+  `dsip-transport`: `Agent::closer` and `agent::Closer`, by which a host says it is closing, and `Error::Closing`,
+  which `Agent::next` and a send return when the connection is lost and the host is closing. `Phone::close` uses it.
 - `dsip_endpoint::Calls`: an answer that arrives after our update lapsed (§12.8 rule 7) is still not applied, and now
   brings a new update of the call as it is here, once, so that the two sides agree about the media again (the
   rule's SHOULD).

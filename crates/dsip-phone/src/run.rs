@@ -91,6 +91,12 @@ impl Runner {
         loop {
             let events = match self.agent.next().await {
                 Ok(events) => events,
+                // closed while the relay was away: there is no connection to close
+                Err(dsip_transport::Error::Closing) => {
+                    self.agent.save_contacts()?;
+                    self.end_all("transport.closed");
+                    return Ok(());
+                }
                 Err(e) => {
                     self.end_all("transport.closed");
                     return Err(e.into());
