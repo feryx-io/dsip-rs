@@ -75,6 +75,9 @@ pub enum LocalEvent {
         /// Optional role-transition signal (§14.4).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         answered_by: Option<String>,
+        /// Seconds until the update expires, and lapses if unanswered (§12.8 rule 7); 30 when absent (§12.9).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        validity: Option<i64>,
     },
     /// Answer the inbound outstanding update.
     AnswerUpdate {
@@ -344,11 +347,13 @@ pub enum UiEvent {
     Offered,
     /// The peer offered an update (§12.8).
     UpdateOffered,
-    /// An update was rejected (§12.8).
+    /// An update was rejected (§12.8), or lapsed unanswered at its `expires_at` (`session.expired`, rule 7).
     UpdateRejected {
         /// The reason token.
         reason: String,
     },
+    /// The peer's update was not answered by its `expires_at`: it may no longer be (§12.8 rule 7).
+    UpdateLapsed,
     /// The caller gave up before the user answered (§12.11).
     MissedCall,
     /// The session ended (§12.4).
@@ -391,6 +396,7 @@ impl UiEvent {
             UiEvent::Offered => "offered",
             UiEvent::UpdateOffered => "update_offered",
             UiEvent::UpdateRejected { .. } => "update_rejected",
+            UiEvent::UpdateLapsed => "update_lapsed",
             UiEvent::MissedCall => "missed_call",
             UiEvent::Ended { .. } => "ended",
             UiEvent::GlareRetry => "glare_retry",
@@ -413,7 +419,7 @@ impl UiEvent {
             UiEvent::IntroductionReceived { from, token: true } => vec![("from", from.as_str().into()), ("token", true.into())],
             UiEvent::IntroductionReceived { from, token: false } => vec![("from", from.as_str().into())],
             UiEvent::Granted { by } => vec![("by", by.as_str().into())],
-            UiEvent::Offered | UiEvent::UpdateOffered | UiEvent::MissedCall | UiEvent::GlareRetry => vec![],
+            UiEvent::Offered | UiEvent::UpdateOffered | UiEvent::UpdateLapsed | UiEvent::MissedCall | UiEvent::GlareRetry => vec![],
         }
     }
 }

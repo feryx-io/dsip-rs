@@ -198,6 +198,13 @@ pub enum CallEvent {
         /// The update id.
         id: String,
     },
+    /// The peer's `update` was not answered by its `expires_at` and can no longer be (§12.8 rule 7).
+    UpdateLapsed {
+        /// Session id.
+        session: String,
+        /// The update id.
+        id: String,
+    },
     /// A recording consent emission (C§4): `{render}`, `{accepted}`, `{send}` or `{blocked}`.
     Recording {
         /// Session id.
@@ -371,6 +378,10 @@ struct Call {
     video: bool,
     /// Our `update` is out, not yet answered or refused (§12.8 rule 2).
     updating: bool,
+    /// The id of our last `update`: only its `answer` is applied (§12.8 rule 7).
+    update_out: Option<String>,
+    /// What `video` was before our `update`: it is that again when the update is refused or lapses (§12.8 rule 5).
+    video_before: bool,
 }
 
 impl Call {
@@ -387,6 +398,8 @@ impl Call {
             started: false,
             video: false,
             updating: false,
+            update_out: None,
+            video_before: false,
         }
     }
 }
@@ -452,9 +465,41 @@ impl Calls {
             out.push(CallOut::Core(ev));
             out.extend(reactions);
         }
+        out.extend(self.lapsed(core));
         // A call that ended before its media started gets no `stop`: its glue state goes now.
         self.calls.retain(|s, c| c.started || !matches!(core.endpoint().session(s).map(|x| x.state), Some(SessionState::Ended)));
         Ok(out)
+    }
+
+    /// §12.8 rule 7: what the glue does about updates the engine no longer holds, though nothing answered them: they
+    /// were not answered by their `expires_at`. Ours is treated as rejected, so its offer is rolled back (B§5.2) and
+    /// the call keeps the media it had; theirs can no longer be answered, and the application is told.
+    fn lapsed(&mut self, core: &Core) -> Vec<CallOut> {
+        let mut out = vec![];
+        for (sid, call) in &mut self.calls {
+            let Some(s) = core.endpoint().session(sid).filter(|s| s.state == SessionState::Active) else { continue };
+            let held = s.outstanding.as_ref().map(|o| o.id.as_str());
+            if call.updating && held.is_none() {
+                call.updating = false;
+                call.video = call.video_before;
+                if self.cfg.media {
+                    out.push(CallOut::Media(MediaRequest::Rollback { session: sid.clone() }));
+                }
+            }
+            // theirs: waiting for the application, or for the host's SDP answer
+            let answering = match &call.awaiting {
+                Some(Awaiting::AnswerUpdate { in_reply_to }) => Some(in_reply_to.clone()),
+                _ => None,
+            };
+            if let Some(id) = call.pending_update.clone().or(answering).filter(|id| held != Some(id.as_str())) {
+                call.pending_update = None;
+                if matches!(&call.awaiting, Some(Awaiting::AnswerUpdate { .. })) {
+                    call.awaiting = None;
+                }
+                out.push(CallOut::Call(CallEvent::UpdateLapsed { session: sid.clone(), id }));
+            }
+        }
+        out
     }
 
     /// Run a core command and observe its events.
@@ -569,6 +614,9 @@ impl Calls {
                 if !stands {
                     return Ok(out);
                 }
+                if call.updating {
+                    call.video = call.video_before;
+                }
                 if std::mem::take(&mut call.updating) && media {
                     // ours lost: its offer is discarded before theirs is answered (B§5.2)
                     out.push(CallOut::Media(MediaRequest::Rollback { session: sid.to_string() }));
@@ -582,10 +630,13 @@ impl Calls {
             // §12.8 rule 5: our update refused; the session, and the media, stay as they were
             "reject" | "error" if call.updating && core.endpoint().session(sid).is_some_and(|s| s.state == SessionState::Active && s.outstanding.is_none()) => {
                 call.updating = false;
+                call.video = call.video_before;
                 if media {
                     out.push(CallOut::Media(MediaRequest::Rollback { session: sid.to_string() }));
                 }
             }
+            // §12.8 rule 7: the answer to an update that lapsed, or that was never ours, is not applied
+            "answer" if payload.get("in_reply_to").is_some() && (!call.updating || payload["in_reply_to"].as_str() != call.update_out.as_deref()) => {}
             "answer" => {
                 call.updating = false;
                 if let (true, Some(sdp)) = (media, remote_sdp) {
@@ -727,6 +778,9 @@ impl Calls {
             MediaResult::Offer { session, sdp } | MediaResult::Answer { session, sdp } => {
                 let Some(call) = self.calls.get_mut(&session) else { return Ok(vec![]) };
                 let Some(awaiting) = call.awaiting.take() else { return Ok(vec![]) };
+                if matches!(awaiting, Awaiting::Update { .. }) {
+                    call.video_before = call.video;
+                }
                 call.video = crate::core::carries_video(&sdp);
                 call.updating = matches!(awaiting, Awaiting::Update { .. });
                 let sdp = Some(sdp);
@@ -739,6 +793,7 @@ impl Calls {
                     Awaiting::Accept { answered_by } => return self.accept(core, session, answered_by, sdp, now),
                     Awaiting::Update { answered_by } => {
                         let id = core.new_id(now);
+                        call.update_out = Some(id.clone());
                         Command::Update { session, id, answered_by: answered_by.map(String::from), sdp }
                     }
                     Awaiting::AnswerUpdate { in_reply_to } => Command::AnswerUpdate { session, in_reply_to, answered_by: Some("user".into()), sdp },

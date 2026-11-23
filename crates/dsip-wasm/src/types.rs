@@ -66,7 +66,7 @@ export interface SendEmission {
 export type UiEmission =
     | { ui: "progress"; status: string }
     | { ui: "answered"; answered_by: string }
-    | { ui: "offered" | "update_offered" | "missed_call" | "glare_retry" }
+    | { ui: "offered" | "update_offered" | "update_lapsed" | "missed_call" | "glare_retry" }
     | { ui: "update_rejected" | "ended" | "error" | "introduction_rejected"; reason: string }
     | { ui: "introduction_received"; from: string; token?: true }
     | { ui: "granted"; by: string };
@@ -222,7 +222,7 @@ impl LocalCommand {
                 Command::PlaceCall { session, to, invite: dsip_endpoint::Invite { sdp, claims, patch: patch.unwrap_or_default() } }
             }
             LocalEvent::Accept { session, answered_by } => Command::Accept { session, answered_by, sdp },
-            LocalEvent::Update { session, id, answered_by } => Command::Update { session, id, answered_by, sdp },
+            LocalEvent::Update { session, id, answered_by, .. } => Command::Update { session, id, answered_by, sdp },
             LocalEvent::AnswerUpdate { session, in_reply_to, answered_by } => Command::AnswerUpdate { session, in_reply_to, answered_by, sdp },
             LocalEvent::Info { session } => match data {
                 Some(data) => Command::Info { session, data },
