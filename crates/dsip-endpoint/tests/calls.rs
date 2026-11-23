@@ -313,7 +313,7 @@ fn tick(side: &mut Side, now: i64) {
 }
 
 #[test]
-fn an_update_never_answered_lapses_at_its_expiry_and_its_late_answer_is_not_applied() {
+fn an_update_never_answered_lapses_at_its_expiry_and_its_late_answer_brings_a_new_update() {
     let (mut a, mut b) = pair(AnswerPolicy::Accept);
     let sid = place(&mut a, &b);
     pump(&mut a, &mut b);
@@ -335,9 +335,21 @@ fn an_update_never_answered_lapses_at_its_expiry_and_its_late_answer_is_not_appl
     b.result(MediaResult::Answer { session: sid.clone(), sdp: sdp_with_video("active") });
     pump(&mut a, &mut b);
     assert!(!a.media.iter().any(|m| matches!(m, MediaRequest::ApplyAnswer { sdp, .. } if sdp.contains("m=video 9"))), "{:?}", a.media);
-    // the call is an audio call again: a later re-offer asks for no video, and may be sent
-    a.command(CallCommand::Update { session: sid.clone() });
+    // its sender applied it, so the two sides differ: a new update is made (rule 7, SHOULD), of the call as it is
+    // here, an audio call again
     assert_eq!(a.media.last(), Some(&MediaRequest::Offer { session: sid.clone(), add_source: false, video: false }));
+    a.result(MediaResult::Offer { session: sid.clone(), sdp: sdp("actpass", "sendrecv") });
+    assert_eq!(a.sent_of("update").len(), 2);
+    let again = a.sent_of("update")[1].clone();
+    assert_eq!(again["media"].as_array().map(Vec::len), Some(1), "{again}");
+    pump(&mut a, &mut b);
+    assert!(matches!(b.events.last(), Some(CallEvent::UpdateOffered { id, .. }) if Some(id.as_str()) == again["id"].as_str()), "{:?}", b.events);
+    // and it is answered as any other: the two sides agree again
+    b.command(CallCommand::AnswerUpdate { session: sid.clone() });
+    b.result(MediaResult::Answer { session: sid.clone(), sdp: sdp("active", "sendrecv") });
+    pump(&mut a, &mut b);
+    let applied = a.media.iter().filter(|m| matches!(m, MediaRequest::ApplyAnswer { sdp, .. } if !sdp.contains("m=video"))).count();
+    assert_eq!(applied, 2, "the invite's answer and this one: {:?}", a.media);
 }
 
 #[test]
