@@ -66,7 +66,7 @@ export interface SendEmission {
 export type UiEmission =
     | { ui: "progress"; status: string }
     | { ui: "answered"; answered_by: string }
-    | { ui: "offered" | "update_offered" | "missed_call" | "glare_retry" }
+    | { ui: "offered" | "update_offered" | "update_lapsed" | "missed_call" | "glare_retry" }
     | { ui: "update_rejected" | "ended" | "error" | "introduction_rejected"; reason: string }
     | { ui: "introduction_received"; from: string; token?: true }
     | { ui: "granted"; by: string };

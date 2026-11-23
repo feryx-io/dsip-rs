@@ -600,6 +600,8 @@ async function onCall(e) {
   }
   if (!call || ![e.session, e.old].includes(call.sid)) return;
   if (e.event === 'update_offered') { call.pendingUpdate = e.id; renderCall(); }
+  // §12.8 rule 7: not answered by its expires_at, their update can no longer be
+  if (e.event === 'update_lapsed' && call.pendingUpdate === e.id) { call.pendingUpdate = null; renderCall(); }
   if (e.event === 'no_offer') log('the caller offered no SDP: answered without media', '§16.3');
   if (e.event === 'recording') {
     const x = e.emission, r = x.render;
@@ -699,7 +701,7 @@ async function onEmission(e) {
   if (e.ui) {
     const fields = Object.entries(e).filter(([k]) => k !== 'ui').map(([k, v]) => `${k}=${v}`).join(' ');
     const sec = { progress: '§12.10', answered: '§14.3', offered: '§12.4', missed_call: '§12.11', ended: '§12.4', glare_retry: '§12.6', update_offered: '§12.8',
-      update_rejected: '§12.8', introduction_received: '§19.4', granted: '§19.4', introduction_rejected: '§19.4' }[e.ui] || '§12';
+      update_rejected: '§12.8', update_lapsed: '§12.8', introduction_received: '§19.4', granted: '§19.4', introduction_rejected: '§19.4' }[e.ui] || '§12';
     log(`◆ ${e.ui} ${fields}`, sec);
     if (e.ui === 'progress') $('call-note').textContent = e.status === 'ringing' ? 'ringing at the other end' : e.status || '';
     if (e.ui === 'answered') $('call-mode').textContent = e.answered_by === 'screening' ? 'answered in screening mode: they hear you, you do not hear them (§14.4)' : '';
