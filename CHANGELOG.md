@@ -44,7 +44,7 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
   outstanding update of ours, and a call whose video was refused is an audio call again for its next re-offer. With
   `dsip-phone`, `Call::video_ask` becomes `Refused` when the peer never answers. Not done: the new `update` the
   rule says a sender SHOULD send after discarding a late answer. **Breaking:** `LocalEvent::Update` has a new
-  field, `UiEvent` and `CallEvent` a new variant, `Session` a new public field. `spec/` moves to DSIP cc54268.
+  field, `UiEvent` and `CallEvent` a new variant, `Session` a new public field. `spec/` moves to DSIP de63ff1 (spec-gap 191 merged).
 
 ## [2026-11-15.1] — workspace release
 
