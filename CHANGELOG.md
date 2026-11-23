@@ -7,6 +7,9 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+- `dsip subscribe` and `dsip presence watch` drop a `notify` of another subscription (§9.3) instead of counting its
+  `seq` as their own: one kept for the device from an earlier subscription made every later notify look stale, which
+  is how the presence demo failed now and then. The relay-rebind demo waits for the relay to log the unbind.
 - **Fix:** `Phone::close` no longer waits forever when the relay is away. The agent redials a lost connection for as
   long as it runs (§13.2), and a wake is not heard meanwhile, so the phone's task never read the close. New in
   `dsip-transport`: `Agent::closer` and `agent::Closer`, by which a host says it is closing, and `Error::Closing`,
