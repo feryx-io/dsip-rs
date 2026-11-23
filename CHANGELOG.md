@@ -7,6 +7,9 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+- `dsip_endpoint::Calls`: an answer that arrives after our update lapsed (§12.8 rule 7) is still not applied, and now
+  brings a new update of the call as it is here, once, so that the two sides agree about the media again (the
+  rule's SHOULD).
 - Profile cards, the extension `profile-card/1.0` (DSIP spec-gap 186): `dsip_core::profile_card` (the card's rules,
   the 16,384-byte cap of an introduction that carries `sealed` and lists the extension), and in
   `dsip_messaging::first_contact` `seal_introduction_with_card`, `seal_grant_profile`, `open_grant_profile`,
