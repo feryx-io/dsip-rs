@@ -155,7 +155,7 @@ impl dsip_transport::conn::Dialer for Cuttable {
 
 /// Found on a phone: locked, its connection was closed by the system, unnoticed until the next call's invite failed
 /// to send, and that failure stopped the agent. A send that fails is a connection lost (§13.2): the agent connects
-/// again and sends it there.
+/// again and sends it there, as its host goes on taking its events ([`Agent::next`]).
 #[tokio::test]
 async fn a_send_on_a_connection_that_died_unnoticed_goes_on_a_new_one() {
     let net = Network::new();
@@ -167,6 +167,7 @@ async fn a_send_on_a_connection_that_died_unnoticed_goes_on_a_new_one() {
 
     cut.store(true, std::sync::atomic::Ordering::SeqCst);
     let sid = alice.call(&bob.identity()).await;
+    alice.expect("the connection again", |e| matches!(e, AgentEvent::Reconnected { .. }).then_some(())).await;
     assert_eq!(bob.expect("ringing", ringing).await, sid, "the invite went on the new connection");
     bob.command(CallCommand::Accept { session: sid.clone() }).await;
     alice.until(&sid, SessionState::Active).await;
@@ -200,4 +201,63 @@ async fn a_timer_fires_in_an_agent_that_is_woken_all_the_time() {
     .unwrap_or_else(|_| panic!("T-Establish had not fired {:?} on", placed.elapsed()));
     assert!(placed.elapsed() >= std::time::Duration::from_secs(4), "T-Establish fired {:?} on", placed.elapsed());
     waking.abort();
+}
+
+/// A dialer whose relay can go away: the streams it gave are cut, and it refuses to dial until the relay is back.
+struct Away {
+    to: std::sync::Arc<dyn dsip_transport::conn::Dialer>,
+    down: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    cut: std::sync::Arc<tokio::sync::Notify>,
+}
+
+impl dsip_transport::conn::Dialer for Away {
+    fn dial(&self) -> dsip_transport::conn::DialFuture {
+        if self.down.load(std::sync::atomic::Ordering::Relaxed) {
+            return Box::pin(async { Err(std::io::Error::from(std::io::ErrorKind::ConnectionRefused)) });
+        }
+        let (dial, cut) = (self.to.dial(), std::sync::Arc::clone(&self.cut));
+        Box::pin(async move {
+            let mut far = dial.await?;
+            let (ours, mut near) = tokio::io::duplex(1 << 17);
+            tokio::spawn(async move {
+                tokio::select! {
+                    _ = tokio::io::copy_bidirectional(&mut far, &mut near) => {}
+                    _ = cut.notified() => {}
+                }
+            });
+            Ok(Box::new(ours) as Box<dyn dsip_transport::conn::Io>)
+        })
+    }
+}
+
+/// The engine's timers run while the relay is away (§13.2: the agent redials; §12.10): a call placed just before the
+/// connection was lost ends at T-Establish, not when the relay is back.
+#[tokio::test]
+async fn a_timer_fires_while_the_relay_is_away() {
+    let net = Network::new();
+    let (down, cut) = (std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), std::sync::Arc::new(tokio::sync::Notify::new()));
+    let dialer = Away { to: net.dialer(), down: std::sync::Arc::clone(&down), cut: std::sync::Arc::clone(&cut) };
+    let cfg = dsip_transport::agent::AgentConfig { t_establish: Some(5), dialer: Some(std::sync::Arc::new(dialer)), ..net.config() };
+    let mut alice = net.connect(net.identity("Alice"), cfg).await;
+    let bob = net.device("Bob").await;
+
+    let sid = alice.call(&bob.identity()).await;
+    let placed = std::time::Instant::now();
+    down.store(true, std::sync::atomic::Ordering::Relaxed);
+    cut.notify_waiters();
+    tokio::time::timeout(std::time::Duration::from_secs(9), async {
+        while alice.endpoint().session(&sid).map(|s| s.state) != Some(SessionState::Ended) {
+            alice.agent.next().await.expect("next");
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("T-Establish had not fired {:?} on, the relay away", placed.elapsed()));
+
+    // the relay is back: the agent binds again and says so, and calls go through as before
+    down.store(false, std::sync::atomic::Ordering::Relaxed);
+    alice.expect("the connection again", |e| matches!(e, AgentEvent::Reconnected { .. }).then_some(())).await;
+    let mut bob = bob;
+    let again = alice.call(&bob.identity()).await;
+    // (the first call's invite may have reached Bob before the relay went, and rings there too)
+    bob.expect("the new call ringing", |e| ringing(e).filter(|s| *s == again)).await;
 }

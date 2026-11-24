@@ -164,6 +164,10 @@ pub struct Agent {
     wake: Arc<tokio::sync::Notify>,
     /// Set once the host is closing the agent ([`Agent::closer`]): a lost connection is no longer redialled.
     stop: Arc<tokio::sync::watch::Sender<bool>>,
+    /// The connection to our relay is lost and this task redials it (§13.2); `None` while connected.
+    redial: Option<Redial>,
+    /// What was to be sent to our relay while the connection was lost, in order; sent on the new one.
+    held: std::collections::VecDeque<dsip_core::envelope::Envelope>,
     /// Connections to other relays, by URL: this device bound there for the calls placed through them (§8.1).
     peers: std::collections::HashMap<String, Connection>,
     /// The sessions placed through another relay: its URL, when the route was made, and whether the session has been
@@ -215,7 +219,7 @@ impl Agent {
         let (resolved_tx, resolved_rx) = mpsc::unbounded_channel();
         let calls = cfg.calls.map(Calls::new);
         Ok(Agent { id, cfg, supported, resolver, conn, core, calls, events: vec![], did_resolver, resolved_tx, resolved_rx, replaced: false, replaced_closed: false,
-                   wake: Arc::new(tokio::sync::Notify::new()), stop: Arc::new(tokio::sync::watch::channel(false).0), peers: Default::default(), routes: Default::default(),
+                   wake: Arc::new(tokio::sync::Notify::new()), stop: Arc::new(tokio::sync::watch::channel(false).0), redial: None, held: Default::default(), peers: Default::default(), routes: Default::default(),
                    kept: Default::default(), awaiting: Default::default() })
     }
 
@@ -263,6 +267,10 @@ impl Agent {
 
     /// Close the connection gracefully (WebSocket close + TLS close_notify).
     pub async fn close(&mut self) {
+        if let Some(redial) = self.redial.take() {
+            redial.abort();
+            return;
+        }
         self.conn.close(tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Normal, "bye").await;
     }
 
@@ -681,16 +689,26 @@ impl Agent {
         Arc::clone(&self.wake)
     }
 
-    /// A handle by which the host says it is closing the agent. A wake ([`Agent::waker`]) is heard only while
-    /// [`Agent::next`] waits, not while it redials a lost connection, which goes on for as long as the relay is away
-    /// (§13.2): a host that asked its own task to stop by a wake alone would wait as long.
+    /// A handle by which the host says it is closing the agent: a lost connection is redialled for as long as the
+    /// relay is away (§13.2), and not once the host is closing. [`Agent::next`] then returns [`crate::Error::Closing`]
+    /// instead of waiting for the relay.
     pub fn closer(&self) -> Closer {
         Closer { stop: Arc::clone(&self.stop), wake: Arc::clone(&self.wake) }
     }
 
     /// Wait for the next thing to happen (inbound frame, timer, connection loss, or a [`Agent::waker`] wake) and
-    /// return the accumulated application events. Reconnects with backoff on connection loss.
+    /// return the accumulated application events.
+    ///
+    /// A lost connection to our relay is redialled with backoff (§13.2) by a task of its own, and `next` goes on
+    /// meanwhile: the engine's timers fire, wakes return and the host's requests are taken, so a call can end, by its
+    /// timers or by the user, while the relay is away. [`AgentEvent::Reconnected`] says the connection is back.
+    ///
+    /// Impl: what is to be sent to our relay meanwhile is held, at most [`HELD_MAX`] messages (the oldest go first),
+    /// and sent in order on the new connection, except what has passed its `expires_at` by then (§10.3). §13.2 says
+    /// sessions are unaffected by a reconnect and no more; a `bye` that arrives late still ends the far side sooner
+    /// than its media timing out.
     pub async fn next(&mut self) -> Result<Vec<AgentEvent>> {
+        let mut stop = self.stop.subscribe();
         loop {
             if !self.routes.is_empty() || !self.peers.is_empty() {
                 self.prune_routes().await;
@@ -703,7 +721,22 @@ impl Agent {
             }
             let wait = self.core.next_deadline().map(|d| (d - now_s()).max(0) as u64).unwrap_or(3600);
             tokio::select! {
-                frame = self.conn.recv() => match frame {
+                // Impl: a host that is closing does not wait for a relay that is away
+                _ = async { let _ = stop.wait_for(|closing| *closing).await; }, if self.redial.is_some() => return Err(crate::Error::Closing),
+                back = Self::redialled(&mut self.redial), if self.redial.is_some() => {
+                    self.redial = None;
+                    match back {
+                        Some((conn, attempts)) => {
+                            self.conn = conn;
+                            self.core.set_authority(Some(self.conn.relay.did.clone()));
+                            self.events.push(AgentEvent::Reconnected { attempts });
+                            self.send_held().await;
+                        }
+                        // the task ends without a connection only when the host is closing
+                        None => return Err(crate::Error::Closing),
+                    }
+                }
+                frame = self.conn.recv(), if self.redial.is_none() => match frame {
                     Ok(Some(text)) => match self.reply_to_request(&text) {
                         Some(reply) => self.events.push(reply),
                         None => {
@@ -716,10 +749,10 @@ impl Agent {
                         self.replaced_closed = true;
                         continue;
                     }
-                    Ok(None) => self.reconnect().await?,
+                    Ok(None) => self.lost(),
                     Err(e) => {
                         tracing::warn!("connection error: {e}");
-                        self.reconnect().await?;
+                        self.lost();
                     }
                 },
                 (url, frame) = Self::peer_recv(&mut self.peers), if !self.peers.is_empty() => match frame {
@@ -760,21 +793,60 @@ impl Agent {
     }
 
     /// Send `env` on the connection to our relay. One that fails is a connection lost, as when receiving on it: the
-    /// agent reconnects (§13.2) and sends it on the new one, rather than failing the host's whole loop. A host whose
-    /// connection the system closed while it slept (a phone, locked) found out only by sending, and stopped.
+    /// agent redials (§13.2) and sends it on the new connection ([`Agent::next`]), rather than failing the host's whole
+    /// loop. A host whose connection the system closed while it slept (a phone, locked) found out only by sending, and
+    /// stopped. While the connection is lost, `env` is held for the new one.
     async fn send_home(&mut self, env: &dsip_core::envelope::Envelope) -> Result<()> {
-        for attempt in 1..=SEND_ATTEMPTS {
+        if self.redial.is_none() {
             match self.conn.send(env).await {
                 Ok(()) => return Ok(()),
                 // §13.2: a connection the relay replaced is not reconnected
-                Err(e) if self.replaced || attempt == SEND_ATTEMPTS => return Err(e),
+                Err(e) if self.replaced => return Err(e),
                 Err(e) => {
                     tracing::warn!("connection error sending: {e}; reconnecting");
-                    self.reconnect().await?;
+                    self.lost();
                 }
             }
         }
+        if self.held.len() == HELD_MAX {
+            tracing::warn!("{HELD_MAX} messages held for a relay that is away: the oldest is dropped");
+            self.held.pop_front();
+        }
+        self.held.push_back(env.clone());
         Ok(())
+    }
+
+    /// The connection to our relay is lost: redial it, unless that is under way.
+    fn lost(&mut self) {
+        if self.redial.is_none() {
+            self.redial = Some(self.redial());
+        }
+    }
+
+    /// Send what was held while the connection was lost, in order, leaving out what has expired since (§10.3). If the
+    /// new connection is lost in turn, the rest stays held.
+    async fn send_held(&mut self) {
+        let now = now_s();
+        while let Some(env) = self.held.pop_front() {
+            if payload_of(&env).and_then(|p| p["expires_at"].as_i64()).is_some_and(|at| at <= now) {
+                continue;
+            }
+            if let Err(e) = self.conn.send(&env).await {
+                tracing::warn!("connection error sending: {e}; reconnecting");
+                self.held.push_front(env);
+                self.lost();
+                return;
+            }
+        }
+    }
+
+    /// The new connection and how many attempts it took, once the redial task has one; `None` when the task ended
+    /// without (the host is closing).
+    async fn redialled(redial: &mut Option<Redial>) -> Option<(Connection, u32)> {
+        match redial {
+            Some(task) => task.await.ok().flatten(),
+            None => std::future::pending().await,
+        }
     }
 
     /// Send `env` on our connection to another relay, `url`. One that fails is closed, as when receiving on it: not
@@ -788,41 +860,56 @@ impl Agent {
         }
     }
 
-    async fn reconnect(&mut self) -> Result<()> {
-        // §13.2: exponential backoff with jitter, fresh hello; sessions are unaffected.
-        let (mut delay, factor, max) = BACKOFF;
-        let mut attempts = 0u32;
-        let mut seen = SeenIds::default();
+    /// Start redialling our relay: §13.2's exponential backoff with jitter and a fresh `hello` each time; sessions are
+    /// unaffected. The task ends with the connection, or with nothing once the host is closing (or the agent is gone).
+    fn redial(&self) -> Redial {
+        let (device, identity, delegation) = (self.id.device.clone(), self.id.meta.identity.clone(), self.id.delegation.clone());
+        let (url, tls, dialer) = (self.cfg.relay_url.clone(), self.cfg.tls.clone(), self.cfg.dialer.clone());
+        // the documents held now (the relay's, from its first `hello`)
+        let (supported, resolver) = (self.supported.clone(), self.resolver.clone());
         let mut stop = self.stop.subscribe();
-        loop {
-            attempts += 1;
-            let jitter = Duration::from_millis((now_s() as u64 * 7919 + attempts as u64 * 104_729) % (delay * 1000));
-            let dial = async {
-                tokio::time::sleep(jitter).await;
-                let params = Self::params(&self.id, &self.cfg, &self.supported);
-                Connection::dial(self.cfg.dialer.as_deref(), &params, &self.resolver, &mut seen).await
-            };
-            // Impl: a host that is closing waits on neither the backoff nor a dial that may never be answered
-            let dialled = tokio::select! {
-                biased;
-                _ = async { let _ = stop.wait_for(|closing| *closing).await; } => return Err(crate::Error::Closing),
-                dialled = dial => dialled,
-            };
-            match dialled {
-                Ok(c) => {
-                    self.conn = c;
-                    self.core.set_authority(Some(self.conn.relay.did.clone()));
-                    self.events.push(AgentEvent::Reconnected { attempts });
-                    return Ok(());
-                }
-                Err(e) => {
-                    tracing::warn!("reconnect attempt {attempts} failed: {e}");
-                    delay = (delay * factor as u64).min(max);
+        tokio::spawn(async move {
+            let (mut delay, factor, max) = BACKOFF;
+            let mut attempts = 0u32;
+            let mut seen = SeenIds::default();
+            loop {
+                attempts += 1;
+                let jitter = Duration::from_millis((now_s() as u64 * 7919 + attempts as u64 * 104_729) % (delay * 1000));
+                let dial = async {
+                    tokio::time::sleep(jitter).await;
+                    let params = ConnectParams {
+                        url: url.clone(),
+                        tls: tls.clone(),
+                        device: &device,
+                        on_behalf_of: Some(identity.clone()),
+                        delegations: vec![delegation.clone()],
+                        supported: supported.clone(),
+                    };
+                    Connection::dial(dialer.as_deref(), &params, &resolver, &mut seen).await
+                };
+                // Impl: a host that is closing waits on neither the backoff nor a dial that may never be answered
+                let dialled = tokio::select! {
+                    biased;
+                    _ = async { let _ = stop.wait_for(|closing| *closing).await; } => return None,
+                    dialled = dial => dialled,
+                };
+                match dialled {
+                    Ok(c) => return Some((c, attempts)),
+                    Err(e) => {
+                        tracing::warn!("reconnect attempt {attempts} failed: {e}");
+                        delay = (delay * factor as u64).min(max);
+                    }
                 }
             }
-        }
+        })
     }
 }
+
+/// The task that redials our relay.
+type Redial = tokio::task::JoinHandle<Option<(Connection, u32)>>;
+
+/// How many messages are held for our relay while the connection to it is lost.
+pub const HELD_MAX: usize = 64;
 
 /// The host's word that it is closing an [`Agent`] ([`Agent::closer`]).
 ///
@@ -842,9 +929,6 @@ impl Closer {
         self.wake.notify_one();
     }
 }
-
-/// How many connections a message to our relay is tried on before its failure is the host's.
-const SEND_ATTEMPTS: u32 = 3;
 
 /// The decoded payload of an envelope, unverified: only to match a reply to its request.
 fn payload_of(env: &dsip_core::envelope::Envelope) -> Option<serde_json::Value> {
