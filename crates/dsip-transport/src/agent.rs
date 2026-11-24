@@ -742,7 +742,12 @@ impl Agent {
                     self.dispatch(out).await?;
                 }
                 _ = tokio::time::sleep(Duration::from_secs(wait.max(1))) => {}
-                _ = self.wake.notified() => return Ok(std::mem::take(&mut self.events)),
+                // a host that wakes it more often than a timer is due (a phone publishing presence: every second)
+                // would otherwise keep that timer from ever firing: the clock is advanced before the wake returns
+                _ = self.wake.notified() => {
+                    self.tick_and_handle().await?;
+                    return Ok(std::mem::take(&mut self.events));
+                }
             }
             self.tick_and_handle().await?;
         }
