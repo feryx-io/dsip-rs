@@ -257,6 +257,7 @@ async fn a_timer_fires_while_the_relay_is_away() {
     down.store(false, std::sync::atomic::Ordering::Relaxed);
     alice.expect("the connection again", |e| matches!(e, AgentEvent::Reconnected { .. }).then_some(())).await;
     let mut bob = bob;
-    let sid = alice.call(&bob.identity()).await;
-    assert_eq!(bob.expect("ringing", ringing).await, sid);
+    let again = alice.call(&bob.identity()).await;
+    // (the first call's invite may have reached Bob before the relay went, and rings there too)
+    bob.expect("the new call ringing", |e| ringing(e).filter(|s| *s == again)).await;
 }
