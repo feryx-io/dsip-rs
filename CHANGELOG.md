@@ -7,6 +7,15 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+- `Messenger::settle` keeps one clock for its whole wait: frames arriving more often than once a second no longer
+  hold back the engine's tick (M§9.4 retries) until they stop.
+- **Fix:** an agent whose relay is away goes on running. `Agent::next` used to redial inside itself for as long as
+  the relay was unreachable (§13.2), so meanwhile no engine timer fired, no wake returned and the host's requests
+  waited: a call could not be hung up (its media went on), and T-Establish, T-Ring or an update's lapse came only
+  when the relay was back. The connection is now redialled by a task of its own. What is to be sent to the relay
+  meanwhile is held (at most `agent::HELD_MAX`, 64 messages) and sent in order on the new connection, except what
+  has expired by then. **Behaviour change:** a send on a connection found dead no longer waits for the new one; it
+  returns at once and the message goes out as the host takes the agent's events.
 - **Fix:** `Agent::next` advances the engine's clock before a wake returns from it. A host that woke it more often
   than its timers were due kept them from firing until a frame happened to arrive: a phone publishing presence wakes
   its agent every second, so an update's lapse (§12.8 rule 7), T-Ring or T-Establish (§12.10) came late or, on a

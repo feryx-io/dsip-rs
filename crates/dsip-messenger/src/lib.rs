@@ -778,6 +778,8 @@ impl<S: Store> Messenger<S> {
     /// come, and running the work events asked for; at most [`SETTLE_S`], and not at all without a connection.
     pub async fn settle(&mut self, host: &mut impl Host<S>) {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(SETTLE_S);
+        // one clock for the whole wait: a sleep begun anew after every frame never ends while frames keep coming
+        let mut clock = tokio::time::interval_at(tokio::time::Instant::now() + Duration::from_secs(1), Duration::from_secs(1));
         loop {
             self.run_jobs(host).await;
             if self.m.settled() || tokio::time::Instant::now() >= deadline {
@@ -789,7 +791,7 @@ impl<S: Store> Messenger<S> {
                     let r = frame.map_err(Error::from);
                     self.received(host, r).await;
                 }
-                _ = tokio::time::sleep(Duration::from_secs(1)) => self.tick(host).await,
+                _ = clock.tick() => self.tick(host).await,
             }
         }
     }

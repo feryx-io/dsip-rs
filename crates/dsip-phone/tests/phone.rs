@@ -452,3 +452,32 @@ async fn a_phone_whose_relay_is_gone_still_closes() {
     // §13.2: the phone redials with backoff for as long as it runs; closing it ends that
     tokio::time::timeout(Duration::from_secs(2), alice.close()).await.expect("the phone closes while its relay is away").expect("closed");
 }
+
+/// A call is hung up while the relay is away (§13.2: the connection is redialled, sessions are unaffected): the call
+/// ends here at once, and the `bye` reaches the far end when the relay is back.
+#[tokio::test]
+async fn a_call_is_hung_up_while_the_relay_is_away() {
+    let net = Network::new();
+    let (down, cut) = (std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), std::sync::Arc::new(tokio::sync::Notify::new()));
+    let dialer = Cut { to: net.dialer(), down: std::sync::Arc::clone(&down), cut: std::sync::Arc::clone(&cut) };
+    let alice = Phone::builder().identity(net.identity("Alice")).dialer(std::sync::Arc::new(dialer)).build().await.expect("phone");
+    let bob = phone(&net, "Bob", AnswerPolicy::Accept).await;
+    let mut call = alice.call(bob.identity()).await.unwrap();
+    let mut theirs = within("incoming call", bob.incoming()).await.unwrap().call;
+    assert!(matches!(within("answer", call.outcome()).await, Outcome::Answered { .. }));
+
+    down.store(true, std::sync::atomic::Ordering::Relaxed);
+    cut.notify_waiters();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    call.hang_up();
+    tokio::time::timeout(Duration::from_secs(2), call.ended()).await.expect("the call ends here while the relay is away");
+    assert!(matches!(theirs.state(), dsip_phone::CallState::Answered { .. }), "Bob has not heard yet");
+
+    // the relay is back: the phone binds again, and what it held is sent
+    down.store(false, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(within("bye at Bob", theirs.ended()).await, "user.hangup");
+    // and the phone works as before
+    let mut again = alice.call(bob.identity()).await.unwrap();
+    assert!(matches!(within("answer", again.outcome()).await, Outcome::Answered { .. }));
+    again.hang_up();
+}
