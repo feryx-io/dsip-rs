@@ -7,6 +7,12 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+- **Fix:** a dial that is never answered ends. The steps before `hello` (the TCP connection, TLS, the WebSocket
+  upgrade) had no bound, so a dial whose far end went away unheard, as when the machine slept in the middle of it,
+  waited for ever: the agent's redial task (§13.2) made no further attempt and the device stayed off its relay,
+  unreachable and without presence, until the app was restarted. One dial now gets `CONNECT_TIMEOUT_S` (20 s) and
+  fails with `Error::ConnectTimeout`; the backoff goes on from there. The same holds for a messenger's dial of its
+  mailbox and an agent's of another relay.
 - `Messenger::settle` keeps one clock for its whole wait: frames arriving more often than once a second no longer
   hold back the engine's tick (M§9.4 retries) until they stop.
 - **Fix:** an agent whose relay is away goes on running. `Agent::next` used to redial inside itself for as long as

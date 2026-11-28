@@ -44,6 +44,12 @@ pub const PING_IDLE_S: u64 = 30;
 pub const DEAD_AFTER_S: u64 = 90;
 /// Seconds a relay waits for a verified `hello` before closing. Spec: §13.2 (RECOMMENDED 10 s).
 pub const HELLO_TIMEOUT_S: u64 = 10;
+/// Seconds a client gives one dial to reach the relay's `hello`: the TCP connection, TLS and the WebSocket upgrade.
+///
+/// Impl: §13.2 bounds the relay's wait for a `hello` (10 s) and spaces the client's attempts, and says nothing of how
+/// long one attempt may take. Without a bound, a dial whose far end went away unheard (the machine slept in the
+/// middle of it) waits for ever, and no later attempt is made.
+pub const CONNECT_TIMEOUT_S: u64 = 20;
 /// Reconnect backoff: initial, factor, max (seconds). Spec: §13.2 (1 s, ×2, 60 s, full jitter).
 pub const BACKOFF: (u64, u32, u64) = (1, 2, 60);
 /// The binding identifier.

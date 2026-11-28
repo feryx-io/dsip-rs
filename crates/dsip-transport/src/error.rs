@@ -25,6 +25,15 @@ pub enum Error {
         /// The WebSocket or TLS failure.
         source: Box<tokio_tungstenite::tungstenite::Error>,
     },
+    /// Dialing the relay did not finish in time ([`crate::CONNECT_TIMEOUT_S`]): no TCP connection, TLS session or
+    /// WebSocket upgrade.
+    #[error("connecting to {url}: no connection within {seconds} s")]
+    ConnectTimeout {
+        /// The relay URL.
+        url: String,
+        /// How long the dial was given.
+        seconds: u64,
+    },
     /// The relay did not complete the `hello` exchange.
     #[error("{0}")]
     Hello(HelloFailure),

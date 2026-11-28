@@ -39,6 +39,9 @@ toml = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 tracing-journald = { workspace = true, optional = true }
 
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
 [features]
 # `config_file`: a service binary's TOML config file, read as its flags; `logging`: where its log lines go
 cli = ["dep:clap", "dep:toml", "dep:tracing-subscriber", "dep:tracing-journald"]
