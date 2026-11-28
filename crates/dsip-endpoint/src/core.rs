@@ -841,6 +841,34 @@ impl Core {
         Ok((grant, rest))
     }
 
+    /// Follow the live grant `grant` this device issued with grant `id` that carries this identity's changed profile
+    /// card, sealed to the grantee ([`LocalEvent::RegrantCard`]): the followed grant's scope, lifetime and audience,
+    /// and no revocation, so what the followed grant admitted at the authority goes on. Returns the signed grant as a
+    /// compact serialization for the host to deliver (a deposit at the grantee's mailbox, M§14.1), and the rest of
+    /// what issuing it emitted; no grant when the engine refused it (no live grant `grant` issued here). The host
+    /// gives a card only by its user's standing choice and only for a grantee that supports the extension.
+    ///
+    /// Spec: §19.4 "A changed card" (`profile-card/1.0`, spec-gap 192). Impl: without the grantee's key agreement
+    /// key, or with a card a receiver would not take, the grant goes without the card, as a first grant does; the
+    /// grant is not sent through the relay.
+    pub fn regrant_card(&mut self, grant: &str, id: String, card: Value, now: i64) -> Result<(Option<String>, Vec<CoreEvent>)> {
+        self.pending_profile = dsip_core::profile_card::take_card(&card).is_some().then_some(card);
+        let out = self.local(LocalEvent::RegrantCard { grant: grant.to_string(), id: id.clone() }, now);
+        self.pending_profile = None;
+        let mut compact = None;
+        let rest = out?
+            .into_iter()
+            .filter_map(|e| match e {
+                CoreEvent::Send { frame, msg_type, .. } if msg_type == "grant" && compact.is_none() && frame_id(&frame).as_deref() == Some(id.as_str()) => {
+                    compact = Envelope::from_frame(&frame).ok().map(|e| format!("{}.{}.{}", e.protected, e.payload, e.signature));
+                    None
+                }
+                e => Some(e),
+            })
+            .collect();
+        Ok((compact, rest))
+    }
+
     /// Hold a grant that reached this device some other way than its relay — deposited at its mailbox in answer to an
     /// introduction, or following a grant held (M§14.1) — as one received through the relay is held: presented where a
     /// grant admits, a presence `subscribe` among them ([`Core::presence_claims`]), and the presence keys it carries
@@ -1403,6 +1431,13 @@ fn selected_codec(section: &dsip_webrtc_binding::Section) -> Option<&'static str
         (p == pt).then(|| rest.split('/').next().unwrap_or("").to_string())
     })?;
     dsip_webrtc_binding::CODEC_ENCODING.iter().find(|(_, e)| e.eq_ignore_ascii_case(&encoding)).map(|(id, _)| *id)
+}
+
+/// The `id` of the message in `frame`, unverified: only to tell which of the frames this core just made is which.
+fn frame_id(frame: &str) -> Option<String> {
+    let env = Envelope::from_frame(frame).ok()?;
+    let payload: Value = serde_json::from_slice(&dsip_core::b64::decode(&env.payload)?).ok()?;
+    payload["id"].as_str().map(String::from)
 }
 
 #[cfg(test)]

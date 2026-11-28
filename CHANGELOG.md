@@ -7,6 +7,13 @@ CalVer workspace tags over per-crate [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+- **A changed profile card reaches those already granted** (§19.4 "A changed card", spec-gap 192).
+  `Phone::send_card(identity, card)` follows each live grant issued to `identity` with one that carries the card
+  sealed to it, with the same scope, lifetime and audience, and revokes nothing: the grantee's watch of our presence
+  goes on (a revocation would end it, which a grantee takes for the share ending and drops the card). It returns the
+  grants for the host to deposit at the grantee's mailbox. `Phone::granted()` lists the identities holding a live
+  grant. Beneath: `LocalEvent::RegrantCard` (the trace event `regrant_card`), `Core::regrant_card`,
+  `Agent::regrant_card`.
 - `Messenger::settle` keeps one clock for its whole wait: frames arriving more often than once a second no longer
   hold back the engine's tick (M§9.4 retries) until they stop.
 - **Fix:** an agent whose relay is away goes on running. `Agent::next` used to redial inside itself for as long as

@@ -182,6 +182,8 @@ enum Cmd {
     HoldGrant { grant: String, reply: oneshot::Sender<Result<bool>> },
     HoldKeyAgreement(serde_json::Value),
     Revoke { identity: String, reply: oneshot::Sender<Result<usize>> },
+    Granted { reply: oneshot::Sender<Vec<String>> },
+    SendCard { identity: String, card: serde_json::Value, reply: oneshot::Sender<Result<Vec<String>>> },
     Wake { ask: WakeAsk, reply: oneshot::Sender<Result<dsip_transport::wake::Answer>> },
     Close,
 }
@@ -343,6 +345,29 @@ impl Phone {
     pub async fn revoke_grants_to(&self, identity: &str) -> Result<usize> {
         let (reply, answer) = oneshot::channel();
         if !self.line.send(Cmd::Revoke { identity: identity.into(), reply }) {
+            return Err(Error::Closed);
+        }
+        answer.await.map_err(|_| Error::Closed)?
+    }
+
+    /// The identities that hold a live grant this device issued, in order: those a changed profile card can be sent
+    /// to ([`Phone::send_card`]).
+    pub async fn granted(&self) -> Result<Vec<String>> {
+        let (reply, answer) = oneshot::channel();
+        if !self.line.send(Cmd::Granted { reply }) {
+            return Err(Error::Closed);
+        }
+        answer.await.map_err(|_| Error::Closed)
+    }
+
+    /// Send `identity` our changed profile card: each live grant this device issued to it is followed by one that
+    /// carries `card` sealed to it, with the same scope, lifetime and audience, and nothing is revoked (§19.4 "A
+    /// changed card", spec-gap 192), so its watch of our presence goes on. Returns the signed grants (compact
+    /// envelopes) for the host to deposit at its mailbox (M§14.1); none when it holds no live grant from this device.
+    /// Give a card only by the user's standing choice and only for an identity that supports `profile-card/1.0`.
+    pub async fn send_card(&self, identity: &str, card: serde_json::Value) -> Result<Vec<String>> {
+        let (reply, answer) = oneshot::channel();
+        if !self.line.send(Cmd::SendCard { identity: identity.into(), card, reply }) {
             return Err(Error::Closed);
         }
         answer.await.map_err(|_| Error::Closed)?

@@ -207,6 +207,30 @@ impl Runner {
                 }
                 let _ = reply.send(self.agent.save_contacts().map(|_| n).map_err(Into::into));
             }
+            Cmd::Granted { reply } => {
+                let now = dsip_transport::now_s();
+                let to: std::collections::BTreeSet<String> =
+                    self.agent.endpoint().contacts.grants_issued.values().filter(|g| g.valid_until > now).map(|g| g.identity.clone()).collect();
+                let _ = reply.send(to.into_iter().collect());
+            }
+            Cmd::SendCard { identity, card, reply } => {
+                let now = dsip_transport::now_s();
+                let ids: Vec<String> = self.agent.endpoint().contacts.grants_issued.iter()
+                    .filter(|(_, g)| g.identity == identity && g.valid_until > now)
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                let mut grants = vec![];
+                for id in ids {
+                    match self.agent.regrant_card(&id, card.clone()).await {
+                        Ok(grant) => grants.extend(grant),
+                        Err(e) => {
+                            let _ = reply.send(Err(e.into()));
+                            return Ok(());
+                        }
+                    }
+                }
+                let _ = reply.send(Ok(grants));
+            }
             Cmd::Wake { ask, reply } => {
                 let (device, relay, now) = (self.agent.device_did().to_string(), self.agent.relay().did.clone(), dsip_transport::now_s());
                 let payload = match ask {
