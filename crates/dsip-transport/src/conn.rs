@@ -115,10 +115,9 @@ impl Connection {
             return Err(Error::NotWss(p.url.clone()));
         }
         let connector = p.tls.clone().map(Connector::Rustls);
-        let (ws, _) =
-            tokio_tungstenite::connect_async_tls_with_config(p.url.as_str(), Some(ws_config()), false, connector)
-                .await
-                .map_err(|e| Error::Connect { url: p.url.clone(), source: Box::new(e) })?;
+        let (ws, _) = Self::in_time(&p.url, tokio_tungstenite::connect_async_tls_with_config(p.url.as_str(), Some(ws_config()), false, connector))
+            .await?
+            .map_err(|e| Error::Connect { url: p.url.clone(), source: Box::new(e) })?;
         Self::bind(Box::new(ws), p, resolver, seen).await
     }
 
@@ -134,10 +133,18 @@ impl Connection {
     /// Run the WebSocket handshake for `p.url` over `stream`, send `hello`, verify the relay's `hello`. Fails closed on
     /// any binding error. `p.tls` is not used: the stream is the host's.
     pub async fn over<S: Io>(stream: S, p: &ConnectParams<'_>, resolver: &dyn Resolver, seen: &mut SeenIds) -> Result<Connection> {
-        let (ws, _) = tokio_tungstenite::client_async_with_config(p.url.as_str(), stream, Some(ws_config()))
-            .await
+        let (ws, _) = Self::in_time(&p.url, tokio_tungstenite::client_async_with_config(p.url.as_str(), stream, Some(ws_config())))
+            .await?
             .map_err(|e| Error::Connect { url: p.url.clone(), source: Box::new(e) })?;
         Self::bind(Box::new(ws), p, resolver, seen).await
+    }
+
+    /// `dial`, given [`crate::CONNECT_TIMEOUT_S`]: the steps before `hello` (TCP, TLS, the WebSocket upgrade) wait on
+    /// the far end with no bound of their own.
+    async fn in_time<T>(url: &str, dial: impl std::future::Future<Output = T>) -> Result<T> {
+        tokio::time::timeout(Duration::from_secs(crate::CONNECT_TIMEOUT_S), dial)
+            .await
+            .map_err(|_| Error::ConnectTimeout { url: url.to_string(), seconds: crate::CONNECT_TIMEOUT_S })
     }
 
     async fn bind(mut ws: Box<dyn Socket>, p: &ConnectParams<'_>, resolver: &dyn Resolver, seen: &mut SeenIds) -> Result<Connection> {
@@ -243,5 +250,30 @@ impl Connection {
     /// Close with a status code.
     pub async fn close(&mut self, code: CloseCode, reason: &str) {
         let _ = self.ws.send(WsMessage::Close(Some(CloseFrame { code, reason: reason.to_string().into() }))).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A dial whose far end takes the bytes and never answers (the machine slept in the middle of it, and the relay's
+    /// close was never heard) ends, so that the next attempt is made (§13.2).
+    #[tokio::test(start_paused = true)]
+    async fn a_dial_never_answered_ends() {
+        let (ours, _theirs) = tokio::io::duplex(1 << 17);
+        let device = KeyPair::generate();
+        let params = ConnectParams {
+            url: "wss://relay.example:8443/dsip".into(),
+            tls: None,
+            device: &device,
+            on_behalf_of: None,
+            delegations: vec![],
+            supported: Supported::default(),
+        };
+        let started = tokio::time::Instant::now();
+        let dialled = Connection::over(ours, &params, &dsip_core::did::StaticResolver::default(), &mut SeenIds::default()).await;
+        assert!(matches!(dialled, Err(Error::ConnectTimeout { seconds: crate::CONNECT_TIMEOUT_S, .. })), "the dial ended some other way");
+        assert_eq!(started.elapsed(), Duration::from_secs(crate::CONNECT_TIMEOUT_S));
     }
 }
