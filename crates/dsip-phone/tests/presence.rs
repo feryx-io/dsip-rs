@@ -269,3 +269,48 @@ async fn a_sibling_seals_at_the_epoch_another_device_rotated_to() {
     let p = until(&dave, bob.identity(), "both of Bob's devices readable", |p| p.source == "record" && p.unreadable == 0).await;
     assert!(["busy", "away"].contains(&p.state.as_str()), "{p:?}");
 }
+
+#[tokio::test]
+async fn a_changed_card_follows_the_grant_and_the_watch_goes_on() {
+    // §19.4 "A changed card" (spec-gap 192): the grant that carries it follows the one issued, permits the same and
+    // revokes nothing, so the grantee's watch is not ended (which it would take for the share ending, spec-gap 190)
+    let net = Network::new();
+    let bob = sealing_phone(&net, "Bob").await;
+    let alice = phone(&net, "Alice").await;
+    let request = GrantRequest {
+        introduction: dsip_core::ulid::Ulid::generate().to_string(),
+        requester: alice.identity().into(),
+        scope: vec!["dsip.invite".into(), "dsip.subscribe".into()],
+        valid_until: dsip_transport::now_s() + 86_400,
+        profile: None,
+    };
+    let payload = |compact: &str| -> serde_json::Value {
+        let part = compact.split('.').nth(1).expect("compact").to_string();
+        serde_json::from_slice(&dsip_core::b64::decode(&part).expect("base64url")).expect("json")
+    };
+    let first = bob.grant_request(request).await.unwrap().expect("a grant");
+    assert!(alice.hold_grant(&first).await.unwrap());
+    alice.watch(bob.identity()).await;
+    bob.set_presence(Some("busy"));
+    until(&alice, bob.identity(), "Bob busy", |p| p.state == "busy" && p.unreadable == 0).await;
+
+    assert_eq!(bob.granted().await.unwrap(), vec![alice.identity().to_string()]);
+    assert_eq!(bob.send_card("did:key:z6MkNobody", serde_json::json!({"display_name": "Bob"})).await.unwrap(), Vec::<String>::new());
+    let sent = bob.send_card(alice.identity(), serde_json::json!({"display_name": "Bob"})).await.unwrap();
+    assert_eq!(sent.len(), 1, "one grant issued to Alice, one that follows it");
+    let (old, new) = (payload(&first), payload(&sent[0]));
+    assert_eq!(new["session"], old["id"], "it follows the grant issued: {new}");
+    assert_eq!((&new["scope"], &new["valid_until"], &new["to"]), (&old["scope"], &old["valid_until"], &old["to"]));
+    assert_eq!(new["profile"]["alg"], "hpke-base-x25519-sha256-aes128gcm", "{new}");
+    assert!(dsip_core::profile_card::lists_profile_card(&new), "{new}");
+    assert!(alice.hold_grant(&sent[0]).await.unwrap(), "the grantee holds the grant that follows");
+
+    // nothing was revoked: no share ended for Alice, and Bob's next record reaches her, readable
+    assert!(tokio::time::timeout(Duration::from_secs(3), alice.share_ended()).await.is_err(), "the share did not end");
+    bob.set_presence(Some("away"));
+    let p = until(&alice, bob.identity(), "Bob away, after the card", |p| p.state == "away").await;
+    assert_eq!(p.unreadable, 0);
+    // the grant issued now is the new one, once
+    assert_eq!(bob.send_card(alice.identity(), serde_json::json!({"display_name": "Robert"})).await.unwrap().len(), 1);
+    assert_eq!(bob.revoke_grants_to(alice.identity()).await.unwrap(), 1);
+}

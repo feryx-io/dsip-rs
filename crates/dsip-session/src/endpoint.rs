@@ -785,6 +785,20 @@ impl Endpoint {
                 self.rotate_due();
                 return;
             }
+            LocalEvent::RegrantCard { grant, id } => {
+                // §19.4 (spec-gap 192): a grant that follows a live grant we issued only to carry a changed profile
+                // card permits what the followed grant did
+                let Some(old) = self.contacts.grants_issued.get(grant).filter(|g| g.valid_until > self.now).cloned() else {
+                    self.emit(Emission::Refused(Refusal::UnknownGrant));
+                    return;
+                };
+                // so the followed grant is not revoked at the authority (a revocation would end the subscription it
+                // admitted, P§7); withdrawn here, it heads the new grant's chain, as in a rotation (spec-gap 159)
+                self.contacts.grants_issued.remove(grant);
+                let chain = std::iter::once(grant.clone()).chain(old.chain.iter().cloned()).collect();
+                self.issue_grant_in_chain(id, &old.identity, old.scope.clone(), old.valid_until, grant, old.presence_audience.as_deref(), chain);
+                return;
+            }
             LocalEvent::RejectIntroduction { introduction, reason } => {
                 let Some((identity, _)) = self.contacts.requests.remove(introduction) else {
                     self.emit(Emission::Refused(Refusal::UnknownIntroduction));
@@ -824,6 +838,7 @@ impl Endpoint {
             | LocalEvent::Introduce { .. }
             | LocalEvent::Grant { .. }
             | LocalEvent::Regrant { .. }
+            | LocalEvent::RegrantCard { .. }
             | LocalEvent::RejectIntroduction { .. }
             | LocalEvent::Revoke { .. }
             // handled before the session lookup, which returned for each of them

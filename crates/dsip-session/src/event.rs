@@ -147,6 +147,14 @@ pub enum LocalEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         presence_audience: Option<String>,
     },
+    /// Issue a grant that follows the live grant `grant` we issued only to carry a changed profile card: the followed
+    /// grant's scope, lifetime and audience, and no revocation (§19.4, spec-gap 192).
+    RegrantCard {
+        /// The grant this one follows.
+        grant: String,
+        /// The new grant's id.
+        id: String,
+    },
     /// Decline a pending introduction.
     RejectIntroduction {
         /// Introduction id.
@@ -176,6 +184,7 @@ impl LocalEvent {
             LocalEvent::Introduce { .. }
             | LocalEvent::Grant { .. }
             | LocalEvent::Regrant { .. }
+            | LocalEvent::RegrantCard { .. }
             | LocalEvent::RejectIntroduction { .. }
             | LocalEvent::Revoke { .. }
             | LocalEvent::IssueToken { .. } => "",

@@ -351,6 +351,18 @@ impl Agent {
         Ok(grant)
     }
 
+    /// Follow the live grant `grant` we issued with one that carries our changed profile card `card`, sealed to the
+    /// grantee, and save it ([`Core::regrant_card`]): nothing is revoked, so what the followed grant admitted at our
+    /// relay goes on. Returns the signed grant for the host to deposit at the grantee's mailbox, or `None` when we
+    /// issued no live grant `grant`. Spec: §19.4 "A changed card" (spec-gap 192).
+    pub async fn regrant_card(&mut self, grant: &str, card: serde_json::Value) -> Result<Option<String>> {
+        let id = self.core.new_id(now_s());
+        let (new, rest) = self.core.regrant_card(grant, id, card, now_s())?;
+        self.dispatch(rest).await?;
+        self.save_contacts()?;
+        Ok(new)
+    }
+
     /// Hold a grant that reached us at our mailbox (M§14.1), as one received through the relay is, and save it:
     /// presented when watching the granter's presence ([`Agent::presence_claims`]), its presence keys opened. Returns
     /// whether it verified and is held ([`Core::hold_grant`]). Spec: §19.4, P§6, P§12.3.
